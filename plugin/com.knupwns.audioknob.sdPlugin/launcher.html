@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Launcher Wheel</title>
+  <link rel="stylesheet" href="pi.css" />
+  <style>
+    input[type="text"] {
+      width: 100%;
+      height: 26px;
+      padding: 0 6px;
+      background: var(--field);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font: inherit;
+      outline: none;
+    }
+
+    input[type="text"]:focus { border-color: var(--accent); }
+
+    button {
+      height: 26px;
+      padding: 0 12px;
+      background: var(--field);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover { border-color: var(--accent); }
+
+    code {
+      background: var(--field);
+      padding: 1px 4px;
+      border-radius: 2px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="row">
+    <div class="label">Folder</div>
+    <div class="value"><input id="folder" type="text" placeholder="%USERPROFILE%\Deck" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Show name</div>
+    <div class="value">
+      <label class="check"><input id="showName" type="checkbox" /> print the item's name on the key</label>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="label"></div>
+    <div class="value"><button id="refresh">Re-read folder</button></div>
+  </div>
+
+  <p class="hint">
+    <b>Rotate</b> scrolls through the folder's contents and shows each item with
+    its own icon. <b>Press</b> opens the one on screen, and remembers it for next
+    time.<br /><br />
+    Put shortcuts (<code>.lnk</code>), internet shortcuts (<code>.url</code>) or
+    programs in the folder — anything Windows can open works. Items are sorted by
+    name; the folder is re-read every few seconds, and the button forces it.
+    Environment variables like <code>%USERPROFILE%</code> are expanded.
+  </p>
+
+  <script src="pi.js"></script>
+  <script>
+    const setFolder = PI.text('folder', 'folder', '');
+    const setShowName = PI.checkbox('showName', 'showName', true);
+    PI.button('refresh', 'refresh');
+
+    PI.ready(function (settings) {
+      setFolder(settings.folder);
+      setShowName(settings.showName);
+    });
+  </script>
+</body>
+
+</html>

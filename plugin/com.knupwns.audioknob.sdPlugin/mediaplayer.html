@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Now Playing</title>
+  <link rel="stylesheet" href="pi.css" />
+</head>
+
+<body>
+  <div class="row">
+    <div class="label">Artist</div>
+    <div class="value choices">
+      <label class="check"><input type="checkbox" id="artistShow" /> show</label>
+      <label class="choice"><input type="radio" name="artistPos" value="top" /> top</label>
+      <label class="choice"><input type="radio" name="artistPos" value="bottom" /> bottom</label>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="label">Track</div>
+    <div class="value choices">
+      <label class="check"><input type="checkbox" id="titleShow" /> show</label>
+      <label class="choice"><input type="radio" name="titlePos" value="top" /> top</label>
+      <label class="choice"><input type="radio" name="titlePos" value="bottom" /> bottom</label>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="label">Scroll speed</div>
+    <div class="value">
+      <select id="speed">
+        <option value="2">slow</option>
+        <option value="3">normal</option>
+        <option value="5">fast</option>
+      </select>
+    </div>
+  </div>
+
+  <p class="hint">
+    The key follows whatever Windows is playing - Spotify, a browser tab, VLC -
+    and <b>pressing</b> it plays or pauses. The glyph shows what the press would
+    do: a pause bar while it plays, a play triangle while it is stopped.<br /><br />
+    A line too long for the key <b>scrolls left and right</b> rather than
+    shrinking to fit. The glyph takes whatever room the lines leave, so it grows
+    when you hide one and shrinks when both sit on the same side.
+  </p>
+
+  <script src="pi.js"></script>
+  <script>
+    const artistShow = document.getElementById('artistShow');
+    const titleShow = document.getElementById('titleShow');
+    const speed = document.getElementById('speed');
+
+    const setArtistShow = PI.checkbox('artistShow', 'artistShow', true);
+    const setArtistPos = PI.radios('artistPos', 'artistPos', 'top');
+    const setTitleShow = PI.checkbox('titleShow', 'titleShow', true);
+    const setTitlePos = PI.radios('titlePos', 'titlePos', 'bottom');
+
+    speed.addEventListener('change', function (event) {
+      PI.set('speed', parseInt(event.target.value, 10));
+    });
+
+    // A position is only a question while the line is on screen.
+    function enable(name, on) {
+      document.querySelectorAll('input[name="' + name + '"]').forEach(function (input) {
+        input.disabled = !on;
+        input.parentElement.style.opacity = on ? '1' : '0.4';
+      });
+    }
+
+    function sync() {
+      enable('artistPos', artistShow.checked);
+      enable('titlePos', titleShow.checked);
+    }
+
+    artistShow.addEventListener('change', sync);
+    titleShow.addEventListener('change', sync);
+
+    PI.ready(function (settings) {
+      setArtistShow(settings.artistShow);
+      setArtistPos(settings.artistPos);
+      setTitleShow(settings.titleShow);
+      setTitlePos(settings.titlePos);
+      speed.value = String(settings.speed || 3);
+      sync();
+    });
+  </script>
+</body>
+
+</html>

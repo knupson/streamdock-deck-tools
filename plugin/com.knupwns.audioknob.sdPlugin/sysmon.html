@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>System Monitor</title>
+  <link rel="stylesheet" href="pi.css" />
+</head>
+
+<body>
+  <div class="row">
+    <div class="label">Metric</div>
+    <div class="value">
+      <select id="metric">
+        <option value="cpu">CPU load</option>
+        <option value="ram">RAM used</option>
+        <option value="gpu">GPU load</option>
+        <option value="vram">VRAM used</option>
+        <option value="disk">Disk activity</option>
+        <option value="net">Network throughput</option>
+        <option value="temp">System temperature</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="label">Refresh</div>
+    <div class="value"><input id="interval" type="number" min="1" max="30" step="1" /></div>
+  </div>
+
+  <p class="hint">
+    The tile draws the value plus a sparkline of recent samples. On a knob,
+    <b>rotating</b> cycles through the metrics; <b>pressing</b> opens Task
+    Manager. Refresh is in seconds.<br /><br />
+    Temperature comes from the ACPI thermal zone, which is a system reading -
+    Windows exposes no per-chip CPU or GPU sensor without a driver.
+  </p>
+
+  <script src="pi.js"></script>
+  <script>
+    const metric = document.getElementById('metric');
+    const setInterval = PI.number('interval', 'interval', 2, 1, 30);
+
+    metric.addEventListener('change', function (event) { PI.set('metric', event.target.value); });
+
+    PI.ready(function (settings) {
+      metric.value = settings.metric || 'cpu';
+      setInterval(settings.interval);
+    });
+  </script>
+</body>
+
+</html>

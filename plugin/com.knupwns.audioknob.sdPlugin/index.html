@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Audio Output Knob</title>
+  <link rel="stylesheet" href="pi.css" />
+</head>
+
+<body>
+  <div class="row">
+    <div class="label">Device A</div>
+    <div class="value"><select id="deviceA"></select></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Device B</div>
+    <div class="value"><select id="deviceB"></select></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Volume step</div>
+    <div class="value"><input id="step" type="number" min="1" max="5" step="1" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Show name</div>
+    <div class="value">
+      <label class="check"><input id="showTitle" type="checkbox" /> print the live device on the key</label>
+    </div>
+  </div>
+
+  <p class="hint">
+    <b>Rotate</b> changes the system volume. <b>Press</b> swaps the default
+    output between A and B. Devices that are powered off are skipped.
+  </p>
+
+  <script src="pi.js"></script>
+  <script>
+    const setStep = PI.number('step', 'step', 1, 1, 5);
+    const setShowTitle = PI.checkbox('showTitle', 'showTitle', true);
+    let devices = [];
+
+    ['deviceA', 'deviceB'].forEach(function (key) {
+      document.getElementById(key).addEventListener('change', function (event) {
+        PI.set(key, event.target.value);
+      });
+    });
+
+    function render(settings) {
+      setStep(settings.step);
+      setShowTitle(settings.showTitle);
+      ['deviceA', 'deviceB'].forEach(function (key) {
+        PI.fill(document.getElementById(key), devices, settings[key] || '', '- none -');
+      });
+    }
+
+    PI.ready(render, function (payload) {
+      devices = payload.devices || devices;
+      render(PI.settings());
+    });
+    PI.ask('getDevices');
+  </script>
+</body>
+
+</html>

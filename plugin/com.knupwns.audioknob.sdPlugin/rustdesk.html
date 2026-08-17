@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>RustDesk Connect</title>
+  <link rel="stylesheet" href="pi.css" />
+  <style>
+    input[type="text"] {
+      width: 100%;
+      height: 26px;
+      padding: 0 6px;
+      background: var(--field);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font: inherit;
+      outline: none;
+    }
+
+    input[type="text"]:focus { border-color: var(--accent); }
+
+    button {
+      height: 26px;
+      padding: 0 12px;
+      background: var(--field);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover { border-color: var(--accent); }
+
+    code {
+      background: var(--field);
+      padding: 1px 4px;
+      border-radius: 2px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="row">
+    <div class="label">Peer ID</div>
+    <div class="value"><input id="id" type="text" placeholder="1195735709" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Name</div>
+    <div class="value"><input id="name" type="text" placeholder="notebook" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Label</div>
+    <div class="value"><input id="showLabel" type="checkbox" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">RustDesk</div>
+    <div class="value"><input id="path" type="text" placeholder="C:\Program Files\RustDesk\rustdesk.exe" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label"></div>
+    <div class="value"><button id="connect">Connect now</button></div>
+  </div>
+
+  <p class="hint">
+    Paste the ID with or without the spaces RustDesk shows it in — they are taken
+    out either way. With no <b>Name</b>, the tile prints the ID grouped the way
+    RustDesk does.<br /><br />
+    Turn <b>Label</b> off for the mark on its own, drawn full size — the tile then
+    matches the icon-pack keys rather than leaving a caption's worth of room
+    empty.<br /><br />
+    <b>NO APP</b> on the tile means the executable is not where <b>RustDesk</b>
+    says it is. Leave that field empty for the usual
+    <code>C:\Program Files\RustDesk\rustdesk.exe</code>; environment variables
+    such as <code>%LOCALAPPDATA%</code> are expanded.<br /><br />
+    The connection itself is RustDesk's business: this key runs
+    <code>rustdesk.exe --connect &lt;id&gt;</code> and gets out of the way, so the
+    password prompt and any saved credentials are the ones you already have.
+  </p>
+
+  <script src="pi.js"></script>
+  <script>
+    const setId = PI.text('id', 'id', '');
+    const setName = PI.text('name', 'name', '');
+    const setPath = PI.text('path', 'path', '');
+    const setShowLabel = PI.checkbox('showLabel', 'showLabel', true);
+    PI.button('connect', 'connect');
+
+    PI.ready(function (settings) {
+      setId(settings.id);
+      setName(settings.name);
+      setPath(settings.path);
+      setShowLabel(settings.showLabel);
+    });
+  </script>
+</body>
+
+</html>

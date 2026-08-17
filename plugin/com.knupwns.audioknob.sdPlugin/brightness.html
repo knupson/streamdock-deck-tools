@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Screen Brightness Knob</title>
+  <link rel="stylesheet" href="pi.css" />
+</head>
+
+<body>
+  <div class="row">
+    <div class="label">Monitor</div>
+    <div class="value"><select id="monitor"></select></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Step</div>
+    <div class="value"><input id="step" type="number" min="1" max="25" step="1" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Dim level</div>
+    <div class="value"><input id="dim" type="number" min="0" max="100" step="5" /></div>
+  </div>
+
+  <p class="hint">
+    <b>Rotate</b> drives the monitor's real backlight over DDC/CI. <b>Press</b>
+    drops to the dim level and pressing again restores the previous brightness.
+    Panels marked <b>no DDC</b> refuse the protocol - usually a setting in the
+    monitor's own menu.
+  </p>
+
+  <script src="pi.js"></script>
+  <script>
+    const monitorSelect = document.getElementById('monitor');
+    const setStep = PI.number('step', 'step', 5, 1, 25);
+    const setDim = PI.number('dim', 'dim', 20, 0, 100);
+    let monitors = [];
+
+    monitorSelect.addEventListener('change', function (event) { PI.set('monitor', event.target.value); });
+
+    function render(settings) {
+      setStep(settings.step);
+      setDim(settings.dim);
+
+      const items = [{ id: 'all', name: 'All screens with DDC' }].concat(monitors);
+      PI.fill(monitorSelect, items, settings.monitor || 'all', null);
+    }
+
+    PI.ready(render, function (payload) {
+      monitors = payload.monitors || monitors;
+      render(PI.settings());
+    });
+    PI.ask('getMonitors');
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>App Volume Knob</title>
+  <link rel="stylesheet" href="pi.css" />
+</head>
+
+<body>
+  <div class="row">
+    <div class="label">Target</div>
+    <div class="value choices">
+      <label class="choice"><input type="radio" name="mode" value="foreground" /> app in focus</label>
+      <label class="choice"><input type="radio" name="mode" value="app" /> a fixed app</label>
+    </div>
+  </div>
+
+  <div class="row" id="appRow">
+    <div class="label">App</div>
+    <div class="value"><select id="app"></select></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Step</div>
+    <div class="value"><input id="step" type="number" min="1" max="25" step="1" /> </div>
+  </div>
+
+  <p class="hint">
+    <b>Rotate</b> changes that application's own volume, <b>press</b> mutes it.
+    In focus mode the knob follows whatever window you are using; apps with no
+    audio session show <b>--</b>. Step is in percent.
+  </p>
+
+  <script src="pi.js"></script>
+  <script>
+    const appRow = document.getElementById('appRow');
+    const appSelect = document.getElementById('app');
+    const setStep = PI.number('step', 'step', 4, 1, 25);
+    let apps = [];
+
+    const setMode = PI.radios('mode', 'mode', 'foreground', function (mode) {
+      appRow.classList.toggle('hidden', mode !== 'app');
+    });
+
+    appSelect.addEventListener('change', function (event) { PI.set('app', event.target.value); });
+
+    function render(settings) {
+      setMode(settings.mode);
+      setStep(settings.step);
+      PI.fill(appSelect, apps, settings.app || '', '- pick an app -');
+    }
+
+    PI.ready(render, function (payload) {
+      apps = payload.apps || apps;
+      render(PI.settings());
+    });
+    PI.ask('getApps');
+  </script>
+</body>
+
+</html>

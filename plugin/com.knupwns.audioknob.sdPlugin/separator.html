@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Separator</title>
+  <link rel="stylesheet" href="pi.css" />
+</head>
+
+<body>
+  <div class="row">
+    <div class="label">Bar</div>
+    <div class="value">
+      <select id="orientation">
+        <option value="vertical">Vertical — divides columns</option>
+        <option value="horizontal">Horizontal — divides rows</option>
+      </select>
+    </div>
+  </div>
+
+  <p class="hint">
+    A key that does nothing. Pressing it runs no command, which is the point: an
+    empty key in a profile is still a key, and one that launches something when
+    your thumb lands on it by mistake is worse than a bar.
+  </p>
+
+  <script src="pi.js"></script>
+  <script>
+    const orientation = document.getElementById('orientation');
+
+    orientation.addEventListener('change', function (event) {
+      PI.set('orientation', event.target.value);
+    });
+
+    PI.ready(function (settings) {
+      orientation.value = settings.orientation || 'vertical';
+    });
+  </script>
+</body>
+
+</html>

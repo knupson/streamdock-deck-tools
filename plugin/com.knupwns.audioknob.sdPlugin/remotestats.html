@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Remote Monitor</title>
+  <link rel="stylesheet" href="pi.css" />
+  <style>
+    input[type="text"] {
+      width: 100%;
+      height: 26px;
+      padding: 0 6px;
+      background: var(--field);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font: inherit;
+      outline: none;
+    }
+
+    input[type="text"]:focus { border-color: var(--accent); }
+
+    button {
+      height: 26px;
+      padding: 0 12px;
+      background: var(--field);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover { border-color: var(--accent); }
+
+    code {
+      background: var(--field);
+      padding: 1px 4px;
+      border-radius: 2px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="row">
+    <div class="label">Name</div>
+    <div class="value"><input id="name" type="text" placeholder="pi4" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Host or IP</div>
+    <div class="value"><input id="host" type="text" placeholder="192.168.1.52" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">User</div>
+    <div class="value"><input id="user" type="text" placeholder="claude" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Port</div>
+    <div class="value"><input id="port" type="number" min="1" max="65535" step="1" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Identity</div>
+    <div class="value"><input id="identity" type="text" placeholder="%USERPROFILE%\.ssh\id_decktools" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Show</div>
+    <div class="value">
+      <label><input id="mCpu" type="checkbox" /> CPU load</label><br />
+      <label><input id="mMem" type="checkbox" /> RAM used</label><br />
+      <label><input id="mTemp" type="checkbox" /> Temperature</label><br />
+      <label><input id="mDisk" type="checkbox" /> Disk used</label><br />
+      <label><input id="mUp" type="checkbox" /> Uptime</label>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="label">Host name</div>
+    <div class="value"><input id="showName" type="checkbox" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Every</div>
+    <div class="value"><input id="interval" type="number" min="5" max="300" step="1" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label"></div>
+    <div class="value"><button id="refresh">Read now</button></div>
+  </div>
+
+  <p class="hint">
+    Tick as many figures as you want on the one key: each gets a row with a bar
+    under it. One on its own instead gets the whole tile — big value and a
+    sparkline of where it has been. Four rows is about as many as stay readable
+    across a desk.<br /><br />
+    Turn <b>Host name</b> off when the key sits directly above or below an SSH
+    key for the same machine: the name is already there, and the caption costs a
+    whole row.<br /><br />
+    <b>Pressing</b> reads the machine straight away instead of waiting for the
+    next interval.<br /><br />
+    Every key pointed at the same machine shares one reading, so four tiles
+    watching one host are one SSH connection every interval, not four. Intervals
+    are in seconds and start at 5: each poll is a full handshake, because the
+    Windows SSH client cannot reuse a connection.<br /><br />
+    <b>DOWN</b> means the machine did not answer with a reading — unreachable,
+    the key refused, or <code>deckstats</code> not installed. The plugin log says
+    which.<br /><br />
+    Set the host up first with
+    <code>.\remote\install-deckstats.ps1 -Target user@host</code>, which prints
+    the exact values for the fields above. It authorises a key that can run
+    nothing but the metrics script, so what is sitting on your disk unencrypted
+    is not a way into the machine.
+  </p>
+
+  <script src="pi.js"></script>
+  <script>
+    const setName = PI.text('name', 'name', '');
+    const setHost = PI.text('host', 'host', '');
+    const setUser = PI.text('user', 'user', '');
+    const setIdentity = PI.text('identity', 'identity', '');
+    const setPort = PI.number('port', 'port', 22, 1, 65535);
+    const setInterval = PI.number('interval', 'interval', 20, 5, 300);
+    PI.button('refresh', 'refresh');
+
+    // Same defaults the plugin falls back to, so a fresh key and this page agree
+    // about what is ticked before anything has been saved.
+    const metrics = [
+      { id: 'mCpu', on: true },
+      { id: 'mMem', on: true },
+      { id: 'mTemp', on: true },
+      { id: 'mDisk', on: false },
+      { id: 'mUp', on: false }
+    ].map(function (m) { return { id: m.id, set: PI.checkbox(m.id, m.id, m.on) }; });
+
+    const setShowName = PI.checkbox('showName', 'showName', true);
+
+    PI.ready(function (settings) {
+      setName(settings.name);
+      setHost(settings.host);
+      setUser(settings.user);
+      setIdentity(settings.identity);
+      setPort(settings.port);
+      setInterval(settings.interval);
+      setShowName(settings.showName);
+
+      metrics.forEach(function (m) { m.set(settings[m.id]); });
+    });
+  </script>
+</body>
+
+</html>

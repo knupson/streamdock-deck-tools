@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Host Wake &amp; Watch</title>
+  <link rel="stylesheet" href="pi.css" />
+  <style>
+    input[type="text"] {
+      width: 100%;
+      height: 26px;
+      padding: 0 6px;
+      background: var(--field);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font: inherit;
+      outline: none;
+    }
+
+    input[type="text"]:focus { border-color: var(--accent); }
+
+    button {
+      height: 26px;
+      padding: 0 12px;
+      background: var(--field);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover { border-color: var(--accent); }
+
+    code {
+      background: var(--field);
+      padding: 1px 4px;
+      border-radius: 2px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="row">
+    <div class="label">Name</div>
+    <div class="value"><input id="name" type="text" placeholder="PI4" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Host or IP</div>
+    <div class="value"><input id="host" type="text" placeholder="192.168.1.50" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">MAC</div>
+    <div class="value"><input id="mac" type="text" placeholder="AA:BB:CC:DD:EE:FF" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Check port</div>
+    <div class="value"><input id="tcpPort" type="number" min="0" max="65535" step="1" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Every</div>
+    <div class="value"><input id="interval" type="number" min="2" max="300" step="1" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">WOL port</div>
+    <div class="value"><input id="wolPort" type="number" min="1" max="65535" step="1" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label"></div>
+    <div class="value"><button id="wake">Send wake packet</button></div>
+  </div>
+
+  <p class="hint">
+    The tile shows the round-trip time while the machine answers, <b>DOWN</b> when
+    it does not, and <b>WAKE</b> just after a wake packet — during that window it
+    is polled every 3 seconds so you see it come up.<br /><br />
+    <b>Press</b> wakes it when it is down, and re-checks when it is already up.<br /><br />
+    <b>Check port</b> at <code>0</code> uses ping. Set it to <code>22</code> or
+    <code>3389</code> for a machine that drops ICMP but serves something — a
+    firewalled host would otherwise always read as asleep. Intervals are in
+    seconds.<br /><br />
+    Wake-on-LAN has to be enabled in the target's BIOS and network adapter, and
+    the packet only crosses the local network unless the router forwards it.
+  </p>
+
+  <script src="pi.js"></script>
+  <script>
+    const setName = PI.text('name', 'name', '');
+    const setHost = PI.text('host', 'host', '');
+    const setMac = PI.text('mac', 'mac', '');
+    const setTcpPort = PI.number('tcpPort', 'tcpPort', 0, 0, 65535);
+    const setInterval = PI.number('interval', 'interval', 10, 2, 300);
+    const setWolPort = PI.number('wolPort', 'wolPort', 9, 1, 65535);
+    PI.button('wake', 'wake');
+
+    PI.ready(function (settings) {
+      setName(settings.name);
+      setHost(settings.host);
+      setMac(settings.mac);
+      setTcpPort(settings.tcpPort);
+      setInterval(settings.interval);
+      setWolPort(settings.wolPort);
+    });
+  </script>
+</body>
+
+</html>

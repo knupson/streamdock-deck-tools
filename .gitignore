@@ -1,0 +1,14 @@
+# Build output. Everything here is produced by .\build.ps1 from sources that are
+# tracked, so committing it would only create diff noise on every build.
+
+# Helper executables and the key-image previews build.ps1 renders for review.
+bin/
+
+# The plugin folder is half source (html, css, js, manifest.json) and half build
+# output: the backends are compiled into it and the key images are rendered into
+# it, so those two are named rather than the folder.
+plugin/com.knupwns.audioknob.sdPlugin/*.exe
+plugin/com.knupwns.audioknob.sdPlugin/images/
+
+# Generated wholesale from tools\brands\*.svg by build.ps1.
+iconpack/

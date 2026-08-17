@@ -1,0 +1,246 @@
+{
+  "Actions": [
+    {
+      "Icon": "images/action",
+      "Name": "Audio Output Knob",
+      "States": [
+        {
+          "Image": "images/headphones",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        },
+        {
+          "Image": "images/speakers",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        }
+      ],
+      "Controllers": [
+        "Knob"
+      ],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Rotate to change volume, press to switch the default output device",
+      "UUID": "com.knupwns.audioknob.action1",
+      "PropertyInspectorPath": "index.html"
+    },
+    {
+      "Icon": "images/mixer",
+      "Name": "App Volume Knob",
+      "States": [
+        {
+          "Image": "images/mixer",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        }
+      ],
+      "Controllers": [
+        "Knob"
+      ],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Rotate for one application's volume, press to mute it",
+      "UUID": "com.knupwns.audioknob.appvolume",
+      "PropertyInspectorPath": "appvolume.html"
+    },
+    {
+      "Icon": "images/sun",
+      "Name": "Screen Brightness Knob",
+      "States": [
+        {
+          "Image": "images/sun",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        }
+      ],
+      "Controllers": [
+        "Knob"
+      ],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Rotate for monitor backlight over DDC/CI, press to dim",
+      "UUID": "com.knupwns.audioknob.brightness",
+      "PropertyInspectorPath": "brightness.html"
+    },
+    {
+      "Icon": "images/screens",
+      "Name": "Blackout Screens",
+      "States": [
+        {
+          "Image": "images/screens",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Cover every monitor in black, or power the displays down",
+      "UUID": "com.knupwns.audioknob.blackout",
+      "PropertyInspectorPath": "blackout.html"
+    },
+    {
+      "Icon": "images/shortcut",
+      "Name": "Launcher Wheel",
+      "States": [
+        {
+          "Image": "images/shortcut",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        }
+      ],
+      "Controllers": [
+        "Knob"
+      ],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Rotate through a folder of shortcuts, press to open the one shown",
+      "UUID": "com.knupwns.audioknob.launcher",
+      "PropertyInspectorPath": "launcher.html"
+    },
+    {
+      "Icon": "images/wake",
+      "Name": "Host Wake & Watch",
+      "States": [
+        {
+          "Image": "images/wake",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Live reachability of a machine; press to wake it over the network",
+      "UUID": "com.knupwns.audioknob.hoststatus",
+      "PropertyInspectorPath": "hoststatus.html"
+    },
+    {
+      "Icon": "images/ssh",
+      "Name": "SSH Connect",
+      "States": [
+        {
+          "Image": "images/ssh",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Live SSH reachability of a machine; press to open a session in a terminal",
+      "UUID": "com.knupwns.audioknob.ssh",
+      "PropertyInspectorPath": "ssh.html"
+    },
+    {
+      "Icon": "images/separator",
+      "Name": "Separator",
+      "States": [
+        {
+          "Image": "images/separator",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": false,
+      "Tooltip": "A bar that divides the deck into groups; pressing it does nothing",
+      "UUID": "com.knupwns.audioknob.separator",
+      "PropertyInspectorPath": "separator.html"
+    },
+    {
+      "Icon": "images/rustdesk",
+      "Name": "RustDesk Connect",
+      "States": [
+        {
+          "Image": "images/rustdesk",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Open a saved RustDesk peer",
+      "UUID": "com.knupwns.audioknob.rustdesk",
+      "PropertyInspectorPath": "rustdesk.html"
+    },
+    {
+      "Icon": "images/remotestats",
+      "Name": "Remote Monitor",
+      "States": [
+        {
+          "Image": "images/remotestats",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        }
+      ],
+      "Controllers": [
+        "Keypad",
+        "Knob"
+      ],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Live CPU, RAM, temperature, disk or uptime of a machine over SSH",
+      "UUID": "com.knupwns.audioknob.remotestats",
+      "PropertyInspectorPath": "remotestats.html"
+    },
+    {
+      "Icon": "images/gauge",
+      "Name": "System Monitor",
+      "States": [
+        {
+          "Image": "images/gauge",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        }
+      ],
+      "Controllers": [
+        "Keypad",
+        "Knob"
+      ],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Live CPU, RAM, GPU, VRAM, disk, network or temperature tile",
+      "UUID": "com.knupwns.audioknob.sysmon",
+      "PropertyInspectorPath": "sysmon.html"
+    },
+    {
+      "Icon": "images/media",
+      "Name": "Now Playing",
+      "States": [
+        {
+          "Image": "images/media",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Play or pause whatever is sounding, with the artist and track on the key",
+      "UUID": "com.knupwns.audioknob.media",
+      "PropertyInspectorPath": "mediaplayer.html"
+    }
+  ],
+  "SDKVersion": 1,
+  "Author": "KnuPwns",
+  "Category": "Deck Tools",
+  "CategoryIcon": "images/category",
+  "CodePath": "DeckTools.exe",
+  "CodePathWin": "DeckTools.exe",
+  "Description": "Audio output switching, per-app volume, monitor brightness, screen blackout, media play/pause and live system tiles.",
+  "Name": "Deck Tools",
+  "Icon": "images/action",
+  "Version": "2.1.0",
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Software": {
+    "MinimumVersion": "2.9"
+  }
+}

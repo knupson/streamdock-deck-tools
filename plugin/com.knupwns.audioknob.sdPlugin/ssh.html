@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>SSH Connect</title>
+  <link rel="stylesheet" href="pi.css" />
+  <style>
+    input[type="text"] {
+      width: 100%;
+      height: 26px;
+      padding: 0 6px;
+      background: var(--field);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font: inherit;
+      outline: none;
+    }
+
+    input[type="text"]:focus { border-color: var(--accent); }
+
+    button {
+      height: 26px;
+      padding: 0 12px;
+      background: var(--field);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover { border-color: var(--accent); }
+
+    code {
+      background: var(--field);
+      padding: 1px 4px;
+      border-radius: 2px;
+    }
+
+    .hidden { display: none; }
+  </style>
+</head>
+
+<body>
+  <div class="row">
+    <div class="label">Name</div>
+    <div class="value"><input id="name" type="text" placeholder="pi4" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Host or IP</div>
+    <div class="value"><input id="host" type="text" placeholder="pi4.lan" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">User</div>
+    <div class="value"><input id="user" type="text" placeholder="youruser" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Port</div>
+    <div class="value"><input id="port" type="number" min="1" max="65535" step="1" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Open in</div>
+    <div class="value">
+      <select id="terminal">
+        <option value="wt">Windows Terminal</option>
+        <option value="console">ssh.exe, own window</option>
+        <option value="powershell">PowerShell</option>
+        <option value="cmd">Command Prompt</option>
+        <option value="custom">Custom command</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="row hidden" id="commandRow">
+    <div class="label">Command</div>
+    <div class="value"><input id="command" type="text" placeholder="wt.exe ssh -i ~/.ssh/id_ed25519 {target}" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Watch host</div>
+    <div class="value"><input id="watch" type="checkbox" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Every</div>
+    <div class="value"><input id="interval" type="number" min="2" max="300" step="1" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label"></div>
+    <div class="value"><button id="connect">Connect now</button></div>
+  </div>
+
+  <p class="hint">
+    <b>Press</b> opens the session. The tile shows the round-trip time while the
+    machine is accepting SSH on that port and <b>DOWN</b> when it is not — the
+    port itself is dialled rather than pinged, so a machine that answers but has
+    no <code>sshd</code> still reads as down. Intervals are in seconds; turn
+    <b>Watch host</b> off for a plain launch key.<br /><br />
+    A down host is still dialled when you press: the connection error belongs in
+    the terminal where you can read it.<br /><br />
+    <b>Custom command</b> is a whole command line, with <code>{host}</code>,
+    <code>{user}</code>, <code>{port}</code> and <code>{target}</code>
+    (<code>user@host</code>) substituted in — that is where an identity file, a
+    jump host or PuTTY goes. Nothing is passed through a shell, so quote a path
+    that contains spaces and nothing else needs escaping.<br /><br />
+    Host and user may only contain letters, digits, dots, dashes and
+    underscores; anything else is refused rather than put on a command line.
+  </p>
+
+  <script src="pi.js"></script>
+  <script>
+    const terminal = document.getElementById('terminal');
+    const commandRow = document.getElementById('commandRow');
+
+    const setName = PI.text('name', 'name', '');
+    const setHost = PI.text('host', 'host', '');
+    const setUser = PI.text('user', 'user', '');
+    const setCommand = PI.text('command', 'command', '');
+    const setPort = PI.number('port', 'port', 22, 1, 65535);
+    const setInterval = PI.number('interval', 'interval', 10, 2, 300);
+    const setWatch = PI.checkbox('watch', 'watch', true);
+    PI.button('connect', 'connect');
+
+    function showCommand(choice) {
+      commandRow.classList.toggle('hidden', choice !== 'custom');
+    }
+
+    terminal.addEventListener('change', function (event) {
+      PI.set('terminal', event.target.value);
+      showCommand(event.target.value);
+    });
+
+    PI.ready(function (settings) {
+      setName(settings.name);
+      setHost(settings.host);
+      setUser(settings.user);
+      setCommand(settings.command);
+      setPort(settings.port);
+      setInterval(settings.interval);
+      setWatch(settings.watch);
+
+      terminal.value = settings.terminal || 'wt';
+      showCommand(terminal.value);
+    });
+  </script>
+</body>
+
+</html>
