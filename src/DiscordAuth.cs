@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Web.Script.Serialization;
@@ -46,6 +47,14 @@ namespace StreamDeckAudio
     internal static class DiscordAuth
     {
         internal const string StreamKitClientId = "207646673902501888";
+        internal const string TokenEndpoint = "https://discord.com/api/v10/oauth2/token";
+        internal const string RedirectUri = "http://localhost";
+
+        internal static readonly string[] Scopes =
+        {
+            "identify", "rpc", "rpc.voice.read", "rpc.voice.write",
+            "rpc.screenshare.read", "rpc.screenshare.write"
+        };
 
         private static readonly JavaScriptSerializer Serializer = new JavaScriptSerializer();
         private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("DeckTools.Discord.v1");
@@ -169,9 +178,65 @@ namespace StreamDeckAudio
             return renewed.Access;
         }
 
+        public static DiscordToken Exchange(string code, string redirectUri)
+        {
+            return PostToken(
+                "grant_type=authorization_code" +
+                "&code=" + Uri.EscapeDataString(code) +
+                "&redirect_uri=" + Uri.EscapeDataString(redirectUri));
+        }
+
         private static DiscordToken TryRefresh(DiscordToken token)
         {
-            return null;   // Task 4
+            if (token == null || string.IsNullOrEmpty(token.Refresh)) return null;
+            try
+            {
+                return PostToken("grant_type=refresh_token&refresh_token=" +
+                                 Uri.EscapeDataString(token.Refresh));
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Discord: refresh fallo: " + ex.Message);
+                return null;
+            }
+        }
+
+        private static DiscordToken PostToken(string grant)
+        {
+            if (string.IsNullOrEmpty(_clientId) || string.IsNullOrEmpty(_clientSecret))
+                throw new InvalidOperationException("faltan CLIENT ID y CLIENT SECRET");
+
+            // El default de .NET Framework 4 es TLS 1.0 y discord.com corta la conexion.
+            // El enum puede no exponer Tls12 segun el framework contra el que compile csc.
+            ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
+
+            string body = grant +
+                          "&client_id=" + Uri.EscapeDataString(_clientId) +
+                          "&client_secret=" + Uri.EscapeDataString(_clientSecret);
+            byte[] payload = Encoding.UTF8.GetBytes(body);
+
+            var request = (HttpWebRequest)WebRequest.Create(TokenEndpoint);
+            request.Method = "POST";
+            request.ContentType = "application/x-www-form-urlencoded";
+            request.ContentLength = payload.Length;
+            request.Timeout = 15000;
+            using (Stream stream = request.GetRequestStream()) stream.Write(payload, 0, payload.Length);
+
+            using (var response = (HttpWebResponse)request.GetResponse())
+            using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
+            {
+                var body_ = Serializer.Deserialize<Dictionary<string, object>>(reader.ReadToEnd());
+                string access = Json.Str(body_, "access_token");
+                if (string.IsNullOrEmpty(access)) throw new Exception("respuesta sin access_token");
+
+                return new DiscordToken
+                {
+                    Access = access,
+                    Refresh = Json.Str(body_, "refresh_token"),
+                    Scope = Json.Str(body_, "scope"),
+                    ExpiresUtc = DateTime.UtcNow.AddSeconds(Json.Int(body_, "expires_in", 604800))
+                };
+            }
         }
     }
 }
