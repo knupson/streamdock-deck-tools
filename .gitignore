@@ -12,3 +12,6 @@ plugin/com.knupwns.audioknob.sdPlugin/images/
 
 # Generated wholesale from tools\brands\*.svg by build.ps1.
 iconpack/
+
+# Isolated worktrees for in-progress work. Scratch, never part of a build.
+.claude/worktrees/
