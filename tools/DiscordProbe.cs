@@ -10,6 +10,7 @@
 //   DiscordProbe.exe deafen
 //   DiscordProbe.exe screenshare
 //   DiscordProbe.exe watch
+//   DiscordProbe.exe raceattach
 
 using System;
 using System.Collections.Generic;
@@ -169,6 +170,66 @@ namespace StreamDeckAudio
             }
         }
 
+        // Fix round 2, Critical 1: fuerza la ventana exacta que el bug
+        // describe -- Disconnected llegando justo antes de que Attach
+        // publique _rpc -- via el seam DiscordService.
+        // TestSimulateDisconnectBeforePublish, en vez de intentar cronometrar
+        // un corte real de Discord (no se puede hacer confiable desde
+        // afuera). Necesita Discord corriendo y una credencial enrolada,
+        // igual que watch/connect: esto NO es un test offline, es un probe
+        // en vivo. Si el fix esta roto, este comando se cuelga hasta el
+        // timeout de abajo sin nunca llegar a Ready -- Poke() devolveria
+        // temprano para siempre porque _rpc quedaria apuntando a la conexion
+        // muerta que se publico por error.
+        private static int RaceAttach()
+        {
+            Console.WriteLine("raceattach: fuerza Disconnected justo antes de publicar _rpc " +
+                               "(Critical 1) y confirma que un intento posterior igual llega a Ready");
+
+            DiscordService.TestSimulateDisconnectBeforePublish = true;
+
+            bool sawForcedDeath = false;
+            bool reachedReady = false;
+
+            DiscordService.Changed += () =>
+            {
+                Console.WriteLine(DateTime.Now.ToString("HH:mm:ss.fff") +
+                                   "  state=" + DiscordService.State +
+                                   "  deaf=" + DiscordService.Deaf +
+                                   "  screensharing=" + DiscordService.ScreenSharing);
+                if (DiscordService.State == DiscordLink.NoDiscord) sawForcedDeath = true;
+                if (DiscordService.State == DiscordLink.Ready) reachedReady = true;
+            };
+
+            // El backoff de Fail() tras la muerte forzada es de 15s; darle
+            // margen de sobra para el reintento real (conectar + autenticar
+            // contra Discord de verdad) antes de declarar wedge.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(40);
+            while (DateTime.UtcNow < deadline && !reachedReady)
+            {
+                DiscordService.Poke();
+                Thread.Sleep(1000);
+            }
+
+            if (!sawForcedDeath)
+            {
+                Console.WriteLine("FALLO: nunca se vio la muerte forzada -- el seam no disparo " +
+                                   "(revisar que Discord este corriendo y la credencial enrolada)");
+                return 1;
+            }
+
+            if (!reachedReady)
+            {
+                Console.WriteLine("FALLO: nunca volvio a Ready despues de la muerte forzada -- " +
+                                   "wedge permanente, Critical 1 sigue roto");
+                return 1;
+            }
+
+            Console.WriteLine("OK: la conexion muerta antes de publicarse no dejo a Poke() colgado; " +
+                               "un intento posterior llego a Ready solo");
+            return 0;
+        }
+
         public static int Main(string[] args)
         {
             Log.Component = "discordprobe";
@@ -184,6 +245,7 @@ namespace StreamDeckAudio
                     case "status": return Status();
                     case "refresh": return Refresh(args);
                     case "watch": return Watch();
+                    case "raceattach": return RaceAttach();
                     default:
                         Console.WriteLine("comando desconocido: " + command);
                         return 2;

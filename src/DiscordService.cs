@@ -3,6 +3,15 @@
 // Conectar y autenticar es I/O bloqueante; corre en su propio thread y el
 // resultado vuelve por el evento Changed, que las acciones traducen a un
 // redibujo desde el hilo del host.
+//
+// Garantia sobre Changed (fix round 2, Important 4): un suscriptor nunca ve
+// State en un valor viejo junto a un Deaf/ScreenSharing ya actualizado. Los
+// handlers de evento (OnVoiceSettings/OnScreenShare) solo avisan si State ya
+// es Ready; si Discord empuja un evento entre el SUBSCRIBE y que Attach
+// termine de marcar la sesion Ready (algo que si pasa: ver el comentario en
+// OnVoiceSettings), el campo se actualiza igual pero el aviso se pospone. El
+// Announce() final de Attach, cuando pasa a Ready, ya sale con los campos al
+// dia -- nunca hace falta un aviso separado para ese primer valor.
 
 using System;
 using System.Collections.Generic;
@@ -19,16 +28,49 @@ namespace StreamDeckAudio
         private static bool _connecting;
         private static DateTime _nextAttemptUtc = DateTime.MinValue;
 
-        public static DiscordLink State { get; private set; }
-        public static bool Deaf { get; private set; }
-        public static bool ScreenSharing { get; private set; }
+        // Volatile: escritos desde el thread de Attach/Detach/los handlers de
+        // evento, leidos desde el thread del host dentro de un handler de
+        // Changed. DiscordRpc.cs ya marca _pipe/_reader volatile por esta
+        // misma razon (ver su comentario); sin esto no hay garantia de que el
+        // hilo del host vea la escritura mas reciente, solo funciona "por las
+        // dudas" en x64.
+        private static volatile DiscordLink _state;
+        private static volatile bool _deaf;
+        private static volatile bool _screenSharing;
+
+        public static DiscordLink State { get { return _state; } private set { _state = value; } }
+        public static bool Deaf { get { return _deaf; } private set { _deaf = value; } }
+        public static bool ScreenSharing { get { return _screenSharing; } private set { _screenSharing = value; } }
 
         public static event Action Changed;
 
+        // Fix round 2, Critical 2: Changed es un multicast delegate invocado
+        // desde threads de fondo (Attach, Detach, los handlers de evento).
+        // Antes de este fix, un suscriptor que tirara (por ejemplo Task 8
+        // redibujando una tecla con una imagen que falta) se propagaba fuera
+        // de Announce en ese thread de fondo -- y .NET mata el proceso entero
+        // ante una excepcion no atrapada en CUALQUIER thread, no solo el
+        // principal. Peor: al ser un solo delegate multicast, un suscriptor
+        // que tira temprano evita que los suscriptores siguientes (la otra
+        // tecla) se enteren de nada. GetInvocationList() + try/catch por
+        // suscriptor aisla a cada uno: uno que tira se loguea y no frena a
+        // los demas ni al proceso.
         private static void Announce()
         {
             Action handler = Changed;
-            if (handler != null) handler();
+            if (handler == null) return;
+
+            foreach (Action subscriber in handler.GetInvocationList())
+            {
+                try
+                {
+                    subscriber();
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("Discord: un suscriptor de Changed tiro: " + ex.Message);
+                }
+            }
         }
 
         /// <summary>
@@ -48,15 +90,48 @@ namespace StreamDeckAudio
             worker.Start();
         }
 
+        // Fix round 2, Critical 1: seam de test. Forzar la ventana real (el
+        // pipe se cae entre que Subscribe confirma y que Attach publica _rpc)
+        // requeriria matar a Discord en el instante exacto entre esas dos
+        // lineas, algo que no se puede cronometrar de forma confiable desde
+        // afuera del proceso. Este flag, seteado por DiscordProbe.exe
+        // raceattach, simula el mismo efecto que tendria un Disconnected real
+        // llegando justo ahi: dispara la misma logica de "dead" y el mismo
+        // Detach que usaria el camino real, asi que ejercita el fix de verdad
+        // en vez de solo simularlo por fuera. One-shot, como el evento real;
+        // nunca se usa fuera de un probe/test.
+        internal static bool TestSimulateDisconnectBeforePublish;
+
         private static void Attach()
         {
-            // Declarado ANTES del try (no adentro, como en las tres rondas de
-            // fix anteriores de este mismo codebase): si algo entre Connect()
-            // y Ready tira -- Subscribe rechazado, timeout -- el catch de
-            // abajo necesita poder cerrar esta conexion. Una var declarada
-            // dentro del try no es visible en su catch; dejarla afuera es lo
-            // unico que permite cerrar sin duplicar el try por cada paso.
+            // Declarado ANTES del try (no adentro, como en las rondas de fix
+            // anteriores de este mismo codebase): si algo entre Connect() y
+            // Ready tira -- Subscribe rechazado, timeout -- el catch de abajo
+            // necesita poder cerrar esta conexion. Una var declarada dentro
+            // del try no es visible en su catch; dejarla afuera es lo unico
+            // que permite cerrar sin duplicar el try por cada paso.
             DiscordRpc rpc = null;
+
+            // Fix round 2, Critical 1: sin bug hace falta, solo timing. Si el
+            // pipe se cae DESPUES de que Connect/AUTHENTICATE/Subscribe ya
+            // terminaron pero ANTES de que este metodo llegue al lock que
+            // publica _rpc, el reader de DiscordRpc ya disparo Disconnected
+            // -> Detach() sobre una conexion que _rpc todavia no conoce (sigue
+            // null), asi que Detach no tiene nada que limpiar. Este metodo,
+            // sin saberlo, publicaria igual una conexion ya muerta, y como
+            // Disconnected es un evento de un solo disparo por instancia,
+            // jamas volveria a avisar: Poke() vuelve temprano para siempre
+            // (_rpc != null), Send() sigue mandando comandos a un cadaver, y
+            // solo un reinicio del proceso lo arregla -- exactamente como
+            // moria el plugin que este reemplaza. `dead` es local a este
+            // intento (no a la clase: dos Attach() nunca corren a la vez,
+            // pero cada uno necesita su propia bandera) y solo se toca bajo
+            // Gate, tanto desde el closure de Disconnected como aca abajo, en
+            // el mismo lock en el que se decide publicar -- eso es lo que
+            // hace que la escritura de un thread sea visible para la lectura
+            // del otro.
+            bool dead = false;
+
             try
             {
                 string token = DiscordAuth.AccessToken();
@@ -78,7 +153,17 @@ namespace StreamDeckAudio
                     return;
                 }
 
-                rpc.Disconnected += Detach;
+                // Captura la instancia, no el campo _rpc: si dos ciclos de
+                // Connect/Close se pisaran (no deberia pasar, Poke() serializa
+                // con _connecting, pero el closure no puede depender de eso),
+                // este handler tiene que actuar sobre SU conexion, nunca sobre
+                // la que sea que _rpc apunte en el momento en que finalmente
+                // dispare.
+                rpc.Disconnected += () =>
+                {
+                    lock (Gate) { dead = true; }
+                    Detach(rpc);
+                };
 
                 // VOICE_SETTINGS_UPDATE es un evento documentado y es lo unico
                 // que la tecla de deafen necesita: sin el no hay forma de saber
@@ -109,7 +194,45 @@ namespace StreamDeckAudio
                 try { OnVoiceSettings(rpc.Request("GET_VOICE_SETTINGS", null, 10000)); }
                 catch (Exception) { }
 
-                lock (Gate) { _rpc = rpc; _connecting = false; }
+                // Seam de test para Critical 1 (ver el comentario del campo):
+                // simula el Disconnected real llegando justo antes del lock de
+                // publicacion, reusando el mismo closure/Detach de arriba.
+                if (TestSimulateDisconnectBeforePublish)
+                {
+                    TestSimulateDisconnectBeforePublish = false; // one-shot, igual que el evento real
+                    lock (Gate) { dead = true; }
+                    Detach(rpc);
+                }
+
+                // Publicar solo si esta conexion sigue viva. `dead` y esta
+                // asignacion se leen/escriben bajo el MISMO lock: si el
+                // closure de Disconnected ya corrio (real o simulado) y marco
+                // dead=true, no publicamos un cadaver -- lo cerramos (Detach ya
+                // lo hizo, pero Close() es idempotente, ver DiscordRpc) y
+                // pasamos por Fail como cualquier otro intento fallido.
+                bool published;
+                lock (Gate)
+                {
+                    if (dead)
+                    {
+                        published = false;
+                    }
+                    else
+                    {
+                        _rpc = rpc;
+                        _connecting = false;
+                        published = true;
+                    }
+                }
+
+                if (!published)
+                {
+                    Log.Write("Discord: la conexion murio antes de publicarse, no se activa (ver Critical 1)");
+                    rpc.Close();
+                    Fail(DiscordLink.NoDiscord);
+                    return;
+                }
+
                 State = DiscordLink.Ready;
                 Log.Write("Discord: sesion lista");
                 Announce();
@@ -118,12 +241,15 @@ namespace StreamDeckAudio
             {
                 Log.Write("Discord: conexion fallo: " + ex.Message);
 
-                // Tercera vez que aparece esta clase de bug en este codebase
-                // (y la que dejaba al plugin que reemplazamos perdiendo un
-                // thread por ciclo de reconexion): un rpc ya conectado que
-                // sale de Attach sin pasar por _rpc tiene que cerrarse aca,
-                // o el reader thread y el handle del pipe quedan huerfanos
-                // para siempre -- nadie mas tiene la referencia para cerrarlos.
+                // Cubre dos casos con la misma linea: (a) el leak de la ronda
+                // de fix anterior (rpc conectado que nunca llego a _rpc), y
+                // (b) la segunda puerta de Critical 1 -- un suscriptor de
+                // Changed que tira DESPUES de publicar (_rpc ya es rpc aca).
+                // Sin este null-out, (b) deja _rpc apuntando a una conexion
+                // que este catch va a cerrar dos lineas mas abajo: el mismo
+                // wedge permanente que Critical 1 describe, solo que
+                // disparado por un suscriptor en vez de por el pipe.
+                lock (Gate) { if (_rpc == rpc) _rpc = null; }
                 if (rpc != null) rpc.Close();
                 Fail(DiscordLink.NoDiscord);
             }
@@ -139,9 +265,28 @@ namespace StreamDeckAudio
             Announce();
         }
 
-        private static void Detach()
+        // Recibe la instancia por parametro (fix round 2, Critical 1), no lee
+        // _rpc: puede dispararse para una conexion que _rpc todavia no conoce
+        // (la ventana de la publicacion tardia) o para la que esta viva hoy.
+        // Solo limpia _rpc si es efectivamente la misma instancia -- idempotente
+        // por instancia, asi que Attach y un Disconnected real nunca se pisan.
+        private static void Detach(DiscordRpc which)
         {
-            lock (Gate) { _rpc = null; _nextAttemptUtc = DateTime.UtcNow.AddSeconds(5); }
+            lock (Gate)
+            {
+                if (_rpc == which) _rpc = null;
+                _nextAttemptUtc = DateTime.UtcNow.AddSeconds(5);
+            }
+
+            // Fix round 2, Important 3: antes esto solo nuleaba el campo. El
+            // reader ya salio (por eso estamos aca), asi que no hay leak de
+            // thread, pero el NamedPipeClientStream sin cerrar espera al
+            // finalizer para liberar el handle -- la misma clase de leak que
+            // los comentarios de este archivo y de DiscordRpc.cs ya senalan
+            // en otros tres lugares. Cerrar aca, con la instancia que
+            // recibimos, no con un campo que puede haber cambiado.
+            which.Close();
+
             State = DiscordLink.NoDiscord;
             Log.Write("Discord: sesion caida");
             Announce();
@@ -156,15 +301,28 @@ namespace StreamDeckAudio
         // el timeout, y mientras tanto ninguna otra respuesta pendiente en esa
         // conexion se despacha -- incluida la de quien esta esperando adentro
         // de Request ahora mismo.
+        //
+        // El guard de State == Ready es Important 4 (fix round 2): Discord
+        // puede empujar el valor actual apenas el SUBSCRIBE se confirma, y el
+        // fetch explicito de GET_VOICE_SETTINGS de mas abajo en Attach corre
+        // con el mismo riesgo -- ambos pueden llamar a este handler ANTES de
+        // que Attach marque State = Ready. El campo se actualiza igual (nunca
+        // hay que perder el dato), pero el aviso se pospone: no tiene sentido
+        // avisar "cambio algo" con un State todavia viejo, y el Announce()
+        // final de Attach al pasar a Ready ya sale con este campo al dia. Una
+        // vez que la sesion esta Ready de verdad, este mismo handler sigue
+        // avisando normalmente en cada evento real (asi se confirmo en vivo:
+        // ver el reporte de Task 6).
         private static void OnVoiceSettings(Dictionary<string, object> data)
         {
             if (data == null) return;
             Deaf = Json.Bool(data, "deaf", Deaf);
-            Announce();
+            if (State == DiscordLink.Ready) Announce();
         }
 
         // Misma regla que OnVoiceSettings: solo asignar y avisar, nunca llamar
-        // ni bloquear. Corre en el mismo thread lector.
+        // ni bloquear, y el mismo guard de State == Ready (Important 4).
+        // Corre en el mismo thread lector.
         //
         // "active" NO esta confirmado contra un SCREENSHARE_STATE_UPDATE real:
         // es un nombre de campo tomado de un bundle de un plugin de terceros,
@@ -182,7 +340,7 @@ namespace StreamDeckAudio
         {
             if (data == null) return;
             ScreenSharing = Json.Bool(data, "active", ScreenSharing);
-            Announce();
+            if (State == DiscordLink.Ready) Announce();
         }
 
         public static void SetDeaf(bool on)
