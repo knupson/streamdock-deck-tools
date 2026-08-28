@@ -300,6 +300,8 @@ git commit -m "test: add assert runner and Discord IPC frame codec"
 ### Task 2: Conexión, handshake y correlación por nonce
 
 **Files:**
+- Create: `src/Json.cs` (movido desde `PluginHost.cs`, Step 1)
+- Modify: `src/PluginHost.cs` (se le saca la clase `Json`)
 - Modify: `src/DiscordRpc.cs`
 - Create: `tools/DiscordProbe.cs`
 - Modify: `build.ps1`
@@ -314,7 +316,23 @@ git commit -m "test: add assert runner and Discord IPC frame codec"
   - `void DiscordRpc.Close()`
   - `class DiscordRpcException : Exception` con `public int Code`.
 
-- [ ] **Step 1: Escribir el test que falla**
+- [ ] **Step 1: Extraer `Json` a su propio archivo**
+
+Tiene que pasar **antes** de implementar nada de este task. A partir del Step 5, `DiscordRpc` usa `Json.Escape`, `Json.Str`, `Json.Dict` y `Json.Int`. Esa clase vive hoy dentro de `src/PluginHost.cs`, que ni `DiscordTests.exe` ni `DiscordProbe.exe` pueden compilar: arrastra el WebSocket entero. Sin este paso, el Step 7 no compila.
+
+Cortar la clase `internal static class Json` completa de `src/PluginHost.cs` y pegarla en `src/Json.cs`, con el mismo namespace `StreamDeckAudio` y los `using` que necesita (`System`, `System.Collections.Generic`, `System.Globalization`, `System.Text`). **No cambiar una línea del cuerpo** — es un movimiento puro, y el diff tiene que poder leerse como tal.
+
+En `build.ps1`, agregar `'src\Json.cs'` a las fuentes de **`DeckTools.exe`** y de **`DiscordTests.exe`**. Lo de `DeckTools.exe` no es opcional: sacar `Json` de `PluginHost.cs` sin agregarlo rompe el build principal en el acto.
+
+Verificar antes de seguir:
+
+Run: `.\build.ps1`
+Expected: compila igual que antes, sin errores.
+
+Run: `.\bin\DiscordTests.exe; echo "exit=$LASTEXITCODE"`
+Expected: `9/9 pasaron`, `exit=0`.
+
+- [ ] **Step 2: Escribir el test que falla**
 
 El handshake necesita Discord corriendo, así que este test vive en el probe, no en `DiscordTests.exe`. `tools/DiscordProbe.cs`:
 
@@ -377,22 +395,22 @@ namespace StreamDeckAudio
 
 `DiscordAuth.StreamKitClientId` es la constante `"207646673902501888"`. Se usa acá sólo para probar el transporte: el handshake no requiere autorización, así que sirve para validar el pipe antes de que exista ninguna app propia. Definirla en este task como `internal const string` dentro de una clase `DiscordAuth` mínima si todavía no existe.
 
-- [ ] **Step 2: Agregar el probe a `build.ps1`**
+- [ ] **Step 3: Agregar el probe a `build.ps1`**
 
 ```powershell
 # Companion de consola para el backend de Discord.
 Invoke-Csc -Out (Join-Path $bin 'DiscordProbe.exe') `
-           -Sources @('src\AudioCore.cs', 'src\DiscordRpc.cs', 'src\DiscordAuth.cs',
-                      'tools\DiscordProbe.cs') `
+           -Sources @('src\AudioCore.cs', 'src\Json.cs', 'src\DiscordRpc.cs',
+                      'src\DiscordAuth.cs', 'tools\DiscordProbe.cs') `
            -Refs @('System.Web.Extensions.dll', 'System.Security.dll')
 ```
 
-- [ ] **Step 3: Correr y verificar que falla**
+- [ ] **Step 4: Correr y verificar que falla**
 
 Run: `.\build.ps1`
 Expected: FALLA — `Connect`, `Close` y `DiscordAuth` no existen.
 
-- [ ] **Step 4: Implementar conexión, handshake y correlación**
+- [ ] **Step 5: Implementar conexión, handshake y correlación**
 
 Agregar a `src/DiscordRpc.cs` (la clase ya es `partial`; se puede seguir en el mismo archivo):
 
@@ -585,7 +603,7 @@ namespace StreamDeckAudio
 }
 ```
 
-- [ ] **Step 5: Correr contra Discord de verdad**
+- [ ] **Step 6: Correr contra Discord de verdad**
 
 Run: `.\build.ps1; .\bin\DiscordProbe.exe connect`
 Expected, con Discord abierto: `conectado, handshake ok`, exit 0.
@@ -593,15 +611,15 @@ Expected, con Discord cerrado: `no hay pipe de Discord abierto`, exit 1.
 
 Probar **los dos casos**. El segundo es el que hace que la tecla sepa dibujar `NoDiscord` en vez de colgarse.
 
-- [ ] **Step 6: Verificar que los tests del Task 1 siguen pasando**
+- [ ] **Step 7: Verificar que los tests del Task 1 siguen pasando**
 
 Run: `.\bin\DiscordTests.exe; echo "exit=$LASTEXITCODE"`
 Expected: `9/9 pasaron`, `exit=0`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/DiscordRpc.cs src/DiscordAuth.cs tools/DiscordProbe.cs build.ps1
+git add src/Json.cs src/PluginHost.cs src/DiscordRpc.cs src/DiscordAuth.cs tools/DiscordProbe.cs build.ps1
 git commit -m "feat: connect to Discord RPC over the named pipe"
 ```
 
@@ -818,13 +836,20 @@ namespace StreamDeckAudio
 }
 ```
 
-`Json.Str` está en `src/PluginHost.cs`, que no se compila dentro de `DiscordTests.exe`. Agregarlo a las fuentes del test **no** sirve: arrastra el WebSocket entero. En cambio, mover `Json` a su propio archivo `src/Json.cs` (cortarlo de `PluginHost.cs` sin tocar el código) y sumarlo a las tres listas de fuentes que lo necesiten.
+`Json` ya vive en `src/Json.cs` desde el Task 2, y `DiscordTests.exe` ya lo compila. Acá no hay que moverlo de nuevo.
 
-- [ ] **Step 4: Extraer `Json` a su propio archivo**
+- [ ] **Step 4: Dar a `DiscordTests.exe` lo que el store necesita**
 
-Cortar la clase `internal static class Json` completa de `src/PluginHost.cs` y pegarla en `src/Json.cs` con los mismos `using` (`System`, `System.Collections.Generic`, `System.Globalization`, `System.Text`) y el mismo namespace. No cambiar una línea del cuerpo.
+En `build.ps1`, en el bloque de `DiscordTests.exe`: agregar `'src\DiscordAuth.cs'` a `-Sources` y `'System.Security.dll'` a `-Refs`. Sin la referencia, `ProtectedData` no resuelve y el test no compila.
 
-Agregar `'src\Json.cs'` a las fuentes de `DeckTools.exe`, `DiscordProbe.exe` y `DiscordTests.exe` en `build.ps1`. Sumar `System.Security.dll` a los `-Refs` de los tres.
+Queda así:
+
+```powershell
+Invoke-Csc -Out (Join-Path $bin 'DiscordTests.exe') `
+           -Sources @('src\AudioCore.cs', 'src\Json.cs', 'src\DiscordRpc.cs',
+                      'src\DiscordAuth.cs', 'test\Assert.cs', 'test\DiscordTests.cs') `
+           -Refs @('System.Web.Extensions.dll', 'System.Security.dll')
+```
 
 - [ ] **Step 5: Implementar `AccessToken` y `SetClientCredentials` como stubs honestos**
 
@@ -877,7 +902,7 @@ Si `FailedRenewalKeepsOldToken` falla, no seguir. Es la garantía entera del red
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/DiscordAuth.cs src/Json.cs src/PluginHost.cs test/DiscordTests.cs build.ps1
+git add src/DiscordAuth.cs test/DiscordTests.cs build.ps1
 git commit -m "feat: DPAPI-backed Discord token store that survives failed renewal"
 ```
 
