@@ -20,12 +20,18 @@ namespace StreamDeckAudio
         public string Scope;
         public DateTime ExpiresUtc;
 
+        // 7 dias es un supuesto sobre el lifetime real de los tokens de Discord,
+        // no algo que leamos del token: no hay issued-at en el store, asi que
+        // no hay forma de calcular el 80% transcurrido de verdad. Estas dos
+        // constantes solo sirven para derivar el umbral fijo de abajo.
         private const double LifetimeDays = 7.0;
         private const double RenewAfter = 0.8;
 
         /// <summary>
-        /// Cierto pasado el 80 % de la vida del token. Renovar temprano deja
-        /// margen para reintentar; renovar al vencer no deja ninguno.
+        /// Cierto cuando faltan 1.4 dias o menos. Ese numero es 20 % de los 7
+        /// dias asumidos arriba -- equivale a "80 % de la vida consumida" solo
+        /// mientras Discord siga emitiendo tokens de 7 dias. Renovar temprano
+        /// deja margen para reintentar; renovar al vencer no deja ninguno.
         /// </summary>
         public bool NeedsRenewal
         {
@@ -37,7 +43,7 @@ namespace StreamDeckAudio
         }
     }
 
-    internal static partial class DiscordAuth
+    internal static class DiscordAuth
     {
         internal const string StreamKitClientId = "207646673902501888";
 
@@ -74,8 +80,36 @@ namespace StreamDeckAudio
             // a medio escribir, que seria justamente quedarse sin credencial.
             string temporary = StorePath + ".tmp";
             File.WriteAllBytes(temporary, sealed_);
-            if (File.Exists(StorePath)) File.Delete(StorePath);
-            File.Move(temporary, StorePath);
+
+            // File.Move no puede pisar un destino existente en .NET Framework
+            // 4.x (tira IOException; el overload que sobreescribe recien llega
+            // en .NET Core 3.0), asi que un Move directo obligaria a un
+            // delete-y-despues-move -- y en el hueco entre esas dos llamadas
+            // StorePath no existe: si el proceso muere ahi, el .tmp queda
+            // completo y cifrado al lado pero Load() nunca lo busca, y
+            // devuelve null como si no hubiera credencial. Eso es exactamente
+            // el estado que este archivo existe para prohibir. File.Replace es
+            // un swap transaccional del filesystem (NTFS): no hay hueco donde
+            // el store pueda faltar. Sin destino todavia (primer alta) no hay
+            // nada que reemplazar, asi que un Move alcanza. Si el filesystem no
+            // soporta Replace, el fallback es el delete-then-move viejo, con
+            // el hueco angosto que eso implica, como ultimo recurso.
+            if (!File.Exists(StorePath))
+            {
+                File.Move(temporary, StorePath);
+                return;
+            }
+
+            try
+            {
+                File.Replace(temporary, StorePath, null);
+            }
+            catch (IOException ex)
+            {
+                Log.Write("Discord: File.Replace fallo, fallback a delete-then-move: " + ex.Message);
+                File.Delete(StorePath);
+                File.Move(temporary, StorePath);
+            }
         }
 
         public static DiscordToken Load()

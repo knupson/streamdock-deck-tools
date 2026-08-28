@@ -105,6 +105,17 @@ namespace StreamDeckAudio
             Check.Equal("expiracion", token.ExpiresUtc, loaded.ExpiresUtc);
         }
 
+        // Cubre la rama File.Replace de Save: la primera Save no encuentra
+        // destino y hace un Move directo; esta segunda si, y tiene que pisarlo
+        // sin dejar un hueco donde el store no exista ni quedarse con el viejo.
+        private static void SaveOverwritesExistingStore()
+        {
+            DiscordAuth.Save(new DiscordToken { Access = "primero", ExpiresUtc = DateTime.UtcNow.AddDays(3) });
+            DiscordAuth.Save(new DiscordToken { Access = "segundo", ExpiresUtc = DateTime.UtcNow.AddDays(3) });
+
+            Check.Equal("el segundo save gana", "segundo", DiscordAuth.Load().Access);
+        }
+
         // 80 % de 7 dias son 5,6 dias. A los 6 hay que renovar; a los 3 todavia no.
         private static void RenewalWindow()
         {
@@ -151,6 +162,7 @@ namespace StreamDeckAudio
             TruncatedStreamIsFalseNotHang();
             InvalidLengthIsFalseWithZeroOpcode();
             TokenRoundTrip();
+            SaveOverwritesExistingStore();
             RenewalWindow();
             FailedRenewalKeepsOldToken();
             CorruptStoreIsNullNotCrash();   // último: deja el store ilegible a proposito
