@@ -77,7 +77,7 @@ Invoke-Csc -Out (Join-Path $bin 'DiscordTests.exe') `
 # Companion de consola para el backend de Discord.
 Invoke-Csc -Out (Join-Path $bin 'DiscordProbe.exe') `
            -Sources @('src\AudioCore.cs', 'src\Json.cs', 'src\DiscordRpc.cs',
-                      'src\DiscordAuth.cs', 'tools\DiscordProbe.cs') `
+                      'src\DiscordAuth.cs', 'src\DiscordService.cs', 'tools\DiscordProbe.cs') `
            -Refs @('System.Web.Extensions.dll', 'System.Security.dll')
 
 # Icon generator, then the icons themselves.

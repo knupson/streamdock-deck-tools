@@ -9,9 +9,11 @@
 //   DiscordProbe.exe refresh [client-id client-secret]
 //   DiscordProbe.exe deafen
 //   DiscordProbe.exe screenshare
+//   DiscordProbe.exe watch
 
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace StreamDeckAudio
 {
@@ -138,6 +140,35 @@ namespace StreamDeckAudio
             return token != null ? 0 : 1;
         }
 
+        // Task 6: ejercita DiscordService entero -- Poke(), el evento Changed,
+        // y ambas suscripciones -- en vez de golpear DiscordRpc a mano como los
+        // comandos de arriba. Es la unica forma de confirmar contra Discord de
+        // verdad que VOICE_SETTINGS_UPDATE y SCREENSHARE_STATE_UPDATE llegan, y
+        // que el campo de screenshare se llama "active" como asume OnScreenShare.
+        private static int Watch()
+        {
+            Console.WriteLine("watch: Poke() cada segundo, Ctrl+C para salir");
+            Console.WriteLine("tocar deafen y compartir pantalla desde Discord mismo");
+
+            DiscordService.Changed += () =>
+            {
+                Console.WriteLine(DateTime.Now.ToString("HH:mm:ss.fff") +
+                                   "  state=" + DiscordService.State +
+                                   "  deaf=" + DiscordService.Deaf +
+                                   "  screensharing=" + DiscordService.ScreenSharing);
+            };
+
+            // Idempotente: llamarlo una vez por segundo es exactamente lo que
+            // hace el tick real del host (ver el comentario de Poke en
+            // DiscordService), asi que este loop es el mismo patron de uso, no
+            // uno especial para el probe.
+            while (true)
+            {
+                DiscordService.Poke();
+                Thread.Sleep(1000);
+            }
+        }
+
         public static int Main(string[] args)
         {
             Log.Component = "discordprobe";
@@ -152,6 +183,7 @@ namespace StreamDeckAudio
                     case "enroll": return Enroll(args);
                     case "status": return Status();
                     case "refresh": return Refresh(args);
+                    case "watch": return Watch();
                     default:
                         Console.WriteLine("comando desconocido: " + command);
                         return 2;

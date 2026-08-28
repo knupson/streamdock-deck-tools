@@ -91,12 +91,18 @@ namespace StreamDeckAudio
         public static void Save(DiscordToken token)
         {
             if (token == null) return;
+            // clientId/clientSecret viajan junto al token para que Task 6 (la
+            // sesion compartida) arranque con credenciales propias sin depender
+            // de que el Property Inspector haya corrido en este proceso: son los
+            // mismos campos estaticos que ya usa PostToken para renovar.
             var record = new Dictionary<string, object>
             {
                 { "access", token.Access },
                 { "refresh", token.Refresh },
                 { "scope", token.Scope },
-                { "expires", token.ExpiresUtc.ToString("o") }
+                { "expires", token.ExpiresUtc.ToString("o") },
+                { "clientId", _clientId },
+                { "clientSecret", _clientSecret }
             };
 
             byte[] plain = Encoding.UTF8.GetBytes(Serializer.Serialize(record));
@@ -149,6 +155,18 @@ namespace StreamDeckAudio
                 var record = Serializer.Deserialize<Dictionary<string, object>>(
                     Encoding.UTF8.GetString(plain));
 
+                // clientId/clientSecret son un agregado de Task 6: un record
+                // escrito por una version anterior de este archivo no los tiene,
+                // y Json.Str devuelve null para una clave ausente -- no hay nada
+                // que parsear ni que tire, asi que un store viejo se sigue
+                // leyendo igual que antes, solo que sin poblar las credenciales.
+                string clientId = Json.Str(record, "clientId");
+                string clientSecret = Json.Str(record, "clientSecret");
+                if (!string.IsNullOrEmpty(clientId) && !string.IsNullOrEmpty(clientSecret))
+                {
+                    SetClientCredentials(clientId, clientSecret);
+                }
+
                 return new DiscordToken
                 {
                     Access = Json.Str(record, "access"),
@@ -167,6 +185,13 @@ namespace StreamDeckAudio
 
         private static string _clientId;
         private static string _clientSecret;
+
+        /// <summary>
+        /// Client id de la app propia. DiscordService lo necesita para el
+        /// handshake RPC (Connect(clientId)); nunca el client secret, que no
+        /// tiene motivo para salir de PostToken.
+        /// </summary>
+        public static string ClientId { get { return _clientId; } }
 
         public static void SetClientCredentials(string clientId, string clientSecret)
         {
