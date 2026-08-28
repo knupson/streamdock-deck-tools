@@ -27,7 +27,7 @@ const PI = (function () {
     socket.onopen = function () {
       socket.send(JSON.stringify({ event: registerEvent, uuid: uuid }));
       onRender(settings);
-      pending.forEach(function (command) { ask(command); });
+      pending.forEach(function (message) { send(message); });
       pending = [];
     };
     socket.onmessage = function (event) {
@@ -41,11 +41,18 @@ const PI = (function () {
     };
   }
 
-  function ask(command) {
-    if (!socket || socket.readyState !== 1) { pending.push(command); return; }
-    socket.send(JSON.stringify({
-      event: 'sendToPlugin', action: actionUuid, context: piUuid, payload: { command: command }
-    }));
+  function send(message) {
+    if (!socket || socket.readyState !== 1) { pending.push(message); return; }
+    socket.send(JSON.stringify(message));
+  }
+
+  // `extra` merges additional fields into the payload alongside `command` -
+  // e.g. ask('authorize', { clientId: x, clientSecret: y }). Omit it and this
+  // is exactly the old { command: command } shape every other page already
+  // relies on.
+  function ask(command, extra) {
+    const payload = extra ? Object.assign({ command: command }, extra) : { command: command };
+    send({ event: 'sendToPlugin', action: actionUuid, context: piUuid, payload: payload });
   }
 
   function save() {

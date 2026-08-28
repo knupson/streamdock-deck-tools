@@ -328,6 +328,50 @@ unless something is moving; see [How it works](#how-it-works).
 > a System Monitor key on the same deck stalls reading a process guarded by
 > anti-cheat, the scrolling freezes for as long as that takes.
 
+### Discord Deafen & Screen Share
+
+Two native keys against Discord's own RPC pipe (`\\.\pipe\discord-ipc-0`),
+replacing the equivalent keys from HotSpot's third-party plugin
+(`com.hotspot.streamdock.discord.sdPlugin`). **Deafen** mutes what you
+*hear* — Discord's deafen, not a microphone mute. **Screen Share** toggles
+Go Live. Both keys share one RPC connection and one Property Inspector
+(`discord.html`); authorizing from either key's panel authorizes both.
+
+Screen Share always opens Discord's own screen/window picker. The command
+behind the key, `TOGGLE_SCREENSHARE`, takes no arguments, and no other
+screenshare command exists on Discord's RPC surface, so there is no way to
+hand it a specific window directly. Automating the picker itself — clicking
+Discord's dialog, sending keystrokes — is the kind of OS-level hack this
+project avoids, so the dialog stays.
+
+#### One-time setup
+
+1. Create an app at [discord.com/developers/applications](https://discord.com/developers/applications).
+2. Under **OAuth2 → General**, add `http://localhost` under **Redirects**.
+   The token exchange checks it even though the authorization code arrives
+   over RPC and no browser redirect ever actually happens.
+3. Paste the app's **Client ID** and **Client Secret** into either key's
+   Property Inspector and press **Autorizar**. No consent dialog typically
+   appears: since you own the app from step 1, Discord grants the
+   authorization silently. A first authorization by someone who is *not*
+   the app's owner is untested and may behave differently.
+
+From there the token renews itself — the whole point of the feature. The
+third-party plugin these keys replace has no refresh token: its token dies
+every 7 days and it cannot recover on its own once that happens. These keys
+hold their own `refresh_token`, renew at 80% of the token's life rather than
+waiting for it to expire, and write the new token to disk before discarding
+the old one — a failed renewal attempt never leaves the key without a usable
+credential, it just retries on the next tick.
+
+`bin\DiscordProbe.exe` is the diagnostic tool when a key stops responding:
+
+```powershell
+.\bin\DiscordProbe.exe status    # is a token stored, and when does it expire
+.\bin\DiscordProbe.exe connect   # is Discord's RPC pipe reachable at all
+.\bin\DiscordProbe.exe watch     # print deaf / screensharing state changes live
+```
+
 ## Icon pack
 
 The same artwork is also shipped as an `.sdIconPack`, so the icons show up in the

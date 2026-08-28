@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Discord</title>
+  <link rel="stylesheet" href="pi.css" />
+  <style>
+    input[type="text"],
+    input[type="password"] {
+      width: 100%;
+      height: 26px;
+      padding: 0 6px;
+      background: var(--field);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font: inherit;
+      outline: none;
+    }
+
+    input[type="text"]:focus,
+    input[type="password"]:focus { border-color: var(--accent); }
+
+    button {
+      height: 26px;
+      padding: 0 12px;
+      background: var(--field);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover { border-color: var(--accent); }
+    button:disabled { opacity: 0.6; cursor: default; }
+
+    a { color: var(--accent); }
+
+    #status { color: var(--text); }
+
+    /* Solo derivado del cuerpo de RESPUESTA de Discord (ver el comentario en
+       ActionsDiscord.PushStatus) -- nunca puede traer un secreto. */
+    #error {
+      margin-top: 4px;
+      color: #e0736c;
+      font-size: 8pt;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="row">
+    <div class="label">Client ID</div>
+    <div class="value"><input id="clientId" type="text" autocomplete="off" spellcheck="false" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Client Secret</div>
+    <div class="value"><input id="clientSecret" type="password" autocomplete="off" spellcheck="false" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label"></div>
+    <div class="value"><button id="authorize">Autorizar</button></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Estado</div>
+    <div class="value" id="status">cargando…</div>
+  </div>
+
+  <div class="row">
+    <div class="label"></div>
+    <div class="value" id="error"></div>
+  </div>
+
+  <p class="hint">
+    Creá la app en
+    <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer">
+      discord.com/developers/applications
+    </a>
+    y copiá su <b>Client ID</b> y <b>Client Secret</b> acá. En OAuth2 &rarr;
+    General, agregá <code>http://localhost</code> como <b>Redirect</b> antes
+    de autorizar: sin ese Redirect el canje del token falla y el error que
+    devuelve Discord no explica por qué.<br /><br />
+    El Client Secret se guarda cifrado en este equipo y nunca vuelve a
+    mostrarse acá. <b>Autorizar</b> abre el diálogo de permisos de Discord -
+    puede tardar unos segundos; el resto del plugin sigue respondiendo
+    mientras tanto.
+  </p>
+
+  <script src="pi.js"></script>
+  <script>
+    const clientIdInput = document.getElementById('clientId');
+    const clientSecretInput = document.getElementById('clientSecret');
+    const authorizeButton = document.getElementById('authorize');
+    const statusDiv = document.getElementById('status');
+    const errorDiv = document.getElementById('error');
+
+    function renderStatus(payload) {
+      const status = (payload && payload.status) || 'sin autorizar';
+      const expires = payload && payload.expires;
+      statusDiv.textContent = expires ? (status + ' - vence ' + expires) : status;
+
+      // error solo aparece cuando una alta (o re-alta) fallo -- ver
+      // ActionsDiscord.PushStatus. Si Load() sigue encontrando una credencial
+      // vieja, status arriba puede seguir diciendo "autorizado" mientras esto
+      // explica que la ULTIMA autorizacion en particular no funciono.
+      const error = payload && payload.error;
+      errorDiv.textContent = error || '';
+      errorDiv.style.display = error ? '' : 'none';
+    }
+
+    function authorize() {
+      const clientId = clientIdInput.value.trim();
+      const clientSecret = clientSecretInput.value.trim();
+      if (!clientId || !clientSecret) return;
+
+      authorizeButton.disabled = true;
+      statusDiv.textContent = 'autorizando… revisá Discord';
+
+      PI.ask('authorize', { clientId: clientId, clientSecret: clientSecret });
+
+      // El secreto no necesita seguir en el campo una vez mandado: nunca
+      // vuelve del backend, así que tampoco hace falta que siga en pantalla.
+      clientSecretInput.value = '';
+    }
+
+    authorizeButton.addEventListener('click', authorize);
+    clientSecretInput.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') authorize();
+    });
+
+    PI.ready(
+      function () { PI.ask('getStatus'); },
+      function (payload) {
+        authorizeButton.disabled = false;
+        renderStatus(payload);
+      }
+    );
+  </script>
+</body>
+
+</html>

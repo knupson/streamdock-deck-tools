@@ -47,11 +47,13 @@ $winrt = @(
 Invoke-Csc -Out (Join-Path $plugin 'DeckTools.exe') -Target 'winexe' `
            -Sources @('src\AudioCore.cs', 'src\AudioSessions.cs', 'src\Monitors.cs', 'src\Metrics.cs',
                       'src\Shortcuts.cs', 'src\Network.cs', 'src\Labels.cs', 'src\KeyImage.cs',
-                      'src\Media.cs', 'src\PluginHost.cs', 'src\ActionsAudio.cs', 'src\ActionsSystem.cs',
+                      'src\Media.cs', 'src\Json.cs', 'src\PluginHost.cs', 'src\ActionsAudio.cs', 'src\ActionsSystem.cs',
                       'src\ActionsLauncher.cs', 'src\ActionsNetwork.cs', 'src\ActionsSsh.cs',
                       'src\ActionsRemote.cs', 'src\ActionsRustDesk.cs',
-                      'src\ActionsSeparator.cs', 'src\ActionsMedia.cs') `
-           -Refs (@('System.Web.Extensions.dll', 'System.Drawing.dll') + $winrt)
+                      'src\ActionsSeparator.cs', 'src\ActionsMedia.cs',
+                      'src\DiscordRpc.cs', 'src\DiscordAuth.cs', 'src\DiscordService.cs',
+                      'src\ActionsDiscord.cs') `
+           -Refs (@('System.Web.Extensions.dll', 'System.Drawing.dll', 'System.Security.dll') + $winrt)
 
 # Blackout overlay, started by the plugin as a separate process because it needs
 # its own message loop.
@@ -67,6 +69,18 @@ Invoke-Csc -Out (Join-Path $bin 'AudioToggle.exe') -Target 'winexe' `
 Invoke-Csc -Out (Join-Path $bin 'FakeApp.exe') `
            -Sources @('src\AudioCore.cs', 'src\AudioSessions.cs', 'src\Monitors.cs',
                       'src\Labels.cs', 'test\FakeApp.cs')
+
+# Tests offline. No necesitan Discord ni el deck.
+Invoke-Csc -Out (Join-Path $bin 'DiscordTests.exe') `
+           -Sources @('src\AudioCore.cs', 'src\Json.cs', 'src\DiscordRpc.cs',
+                      'src\DiscordAuth.cs', 'test\Assert.cs', 'test\DiscordTests.cs') `
+           -Refs @('System.Web.Extensions.dll', 'System.Security.dll')
+
+# Companion de consola para el backend de Discord.
+Invoke-Csc -Out (Join-Path $bin 'DiscordProbe.exe') `
+           -Sources @('src\AudioCore.cs', 'src\Json.cs', 'src\DiscordRpc.cs',
+                      'src\DiscordAuth.cs', 'src\DiscordService.cs', 'tools\DiscordProbe.cs') `
+           -Refs @('System.Web.Extensions.dll', 'System.Security.dll')
 
 # Icon generator, then the icons themselves.
 $genIcons = Join-Path $bin 'GenIcons.exe'
