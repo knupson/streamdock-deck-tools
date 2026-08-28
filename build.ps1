@@ -47,7 +47,7 @@ $winrt = @(
 Invoke-Csc -Out (Join-Path $plugin 'DeckTools.exe') -Target 'winexe' `
            -Sources @('src\AudioCore.cs', 'src\AudioSessions.cs', 'src\Monitors.cs', 'src\Metrics.cs',
                       'src\Shortcuts.cs', 'src\Network.cs', 'src\Labels.cs', 'src\KeyImage.cs',
-                      'src\Media.cs', 'src\PluginHost.cs', 'src\ActionsAudio.cs', 'src\ActionsSystem.cs',
+                      'src\Media.cs', 'src\Json.cs', 'src\PluginHost.cs', 'src\ActionsAudio.cs', 'src\ActionsSystem.cs',
                       'src\ActionsLauncher.cs', 'src\ActionsNetwork.cs', 'src\ActionsSsh.cs',
                       'src\ActionsRemote.cs', 'src\ActionsRustDesk.cs',
                       'src\ActionsSeparator.cs', 'src\ActionsMedia.cs') `
@@ -70,9 +70,15 @@ Invoke-Csc -Out (Join-Path $bin 'FakeApp.exe') `
 
 # Tests offline. No necesitan Discord ni el deck.
 Invoke-Csc -Out (Join-Path $bin 'DiscordTests.exe') `
-           -Sources @('src\AudioCore.cs', 'src\DiscordRpc.cs',
+           -Sources @('src\AudioCore.cs', 'src\Json.cs', 'src\DiscordRpc.cs',
                       'test\Assert.cs', 'test\DiscordTests.cs') `
            -Refs @('System.Web.Extensions.dll')
+
+# Companion de consola para el backend de Discord.
+Invoke-Csc -Out (Join-Path $bin 'DiscordProbe.exe') `
+           -Sources @('src\AudioCore.cs', 'src\Json.cs', 'src\DiscordRpc.cs',
+                      'src\DiscordAuth.cs', 'tools\DiscordProbe.cs') `
+           -Refs @('System.Web.Extensions.dll', 'System.Security.dll')
 
 # Icon generator, then the icons themselves.
 $genIcons = Join-Path $bin 'GenIcons.exe'

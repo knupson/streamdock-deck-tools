@@ -61,12 +61,38 @@ namespace StreamDeckAudio
             }
         }
 
+        // Un largo corrupto no debe dejar el opcode a medio pisar: todos los
+        // caminos de falla tienen que dejar el out-param igual, en 0.
+        private static void InvalidLengthIsFalseWithZeroOpcode()
+        {
+            // Largo negativo: -1 como int32 little-endian.
+            using (var buffer = new MemoryStream(new byte[] { 1, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF }))
+            {
+                int opcode;
+                string json;
+                Check.Equal("largo negativo devuelve false", false,
+                            DiscordRpc.ReadFrame(buffer, out opcode, out json));
+                Check.Equal("largo negativo deja opcode en 0", 0, opcode);
+            }
+
+            // Largo por encima del tope de 8 MiB: 8388609 como int32 little-endian.
+            using (var buffer = new MemoryStream(new byte[] { 1, 0, 0, 0, 0x01, 0x00, 0x80, 0x00 }))
+            {
+                int opcode;
+                string json;
+                Check.Equal("largo excede el limite devuelve false", false,
+                            DiscordRpc.ReadFrame(buffer, out opcode, out json));
+                Check.Equal("largo excede el limite deja opcode en 0", 0, opcode);
+            }
+        }
+
         public static int Main()
         {
             FrameRoundTrip();
             HeaderIsLittleEndian();
             UnicodeSurvives();
             TruncatedStreamIsFalseNotHang();
+            InvalidLengthIsFalseWithZeroOpcode();
             return Check.Report();
         }
     }
