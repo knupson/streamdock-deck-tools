@@ -222,6 +222,42 @@
       "Tooltip": "Play or pause whatever is sounding, with the artist and track on the key",
       "UUID": "com.knupwns.audioknob.media",
       "PropertyInspectorPath": "mediaplayer.html"
+    },
+    {
+      "Icon": "images/action",
+      "Name": "Discord Deafen",
+      "States": [
+        {
+          "Image": "images/headphones",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Enmudece los auriculares en Discord",
+      "UUID": "com.knupwns.audioknob.discorddeafen",
+      "PropertyInspectorPath": "discord.html"
+    },
+    {
+      "Icon": "images/action",
+      "Name": "Discord Screen Share",
+      "States": [
+        {
+          "Image": "images/share-off",
+          "TitleAlignment": "top",
+          "FontSize": "10"
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Comparte o corta la pantalla en Discord",
+      "UUID": "com.knupwns.audioknob.discordscreenshare",
+      "PropertyInspectorPath": "discord.html"
     }
   ],
   "SDKVersion": 1,

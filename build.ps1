@@ -50,8 +50,10 @@ Invoke-Csc -Out (Join-Path $plugin 'DeckTools.exe') -Target 'winexe' `
                       'src\Media.cs', 'src\Json.cs', 'src\PluginHost.cs', 'src\ActionsAudio.cs', 'src\ActionsSystem.cs',
                       'src\ActionsLauncher.cs', 'src\ActionsNetwork.cs', 'src\ActionsSsh.cs',
                       'src\ActionsRemote.cs', 'src\ActionsRustDesk.cs',
-                      'src\ActionsSeparator.cs', 'src\ActionsMedia.cs') `
-           -Refs (@('System.Web.Extensions.dll', 'System.Drawing.dll') + $winrt)
+                      'src\ActionsSeparator.cs', 'src\ActionsMedia.cs',
+                      'src\DiscordRpc.cs', 'src\DiscordAuth.cs', 'src\DiscordService.cs',
+                      'src\ActionsDiscord.cs') `
+           -Refs (@('System.Web.Extensions.dll', 'System.Drawing.dll', 'System.Security.dll') + $winrt)
 
 # Blackout overlay, started by the plugin as a separate process because it needs
 # its own message loop.

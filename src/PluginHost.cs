@@ -178,6 +178,8 @@ namespace StreamDeckAudio
                 Register(new RustDeskAction());
                 Register(new SeparatorAction());
                 Register(new MediaPlayerAction());
+                Register(new DiscordDeafenAction());
+                Register(new DiscordScreenShareAction());
 
                 Connect(port, uuid, registerEvent);
                 StartTicker();
