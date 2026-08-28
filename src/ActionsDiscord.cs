@@ -194,7 +194,7 @@ namespace StreamDeckAudio
                 {
                     case DiscordLink.NoDiscord:     art = OfflineArtwork(); caption = "Sin Discord";  break;
                     case DiscordLink.NoAuth:        art = OfflineArtwork(); caption = "Sin permiso";  break;
-                    case DiscordLink.RenewalFailed: art = OfflineArtwork(); caption = "Sin conexion";  break;
+                    case DiscordLink.RenewalFailed: art = OfflineArtwork(); caption = "Sin red";  break;
                     default:                        art = Artwork();         caption = Caption();     break;
                 }
 
