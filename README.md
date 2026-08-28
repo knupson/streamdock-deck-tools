@@ -351,8 +351,10 @@ project avoids, so the dialog stays.
    The token exchange checks it even though the authorization code arrives
    over RPC and no browser redirect ever actually happens.
 3. Paste the app's **Client ID** and **Client Secret** into either key's
-   Property Inspector and press **Autorizar**. Discord shows a consent
-   dialog the first time.
+   Property Inspector and press **Autorizar**. No consent dialog typically
+   appears: since you own the app from step 1, Discord grants the
+   authorization silently. A first authorization by someone who is *not*
+   the app's owner is untested and may behave differently.
 
 From there the token renews itself — the whole point of the feature. The
 third-party plugin these keys replace has no refresh token: its token dies
