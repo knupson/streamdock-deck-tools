@@ -1,7 +1,7 @@
 # Discord nativo — deafen y screen share por RPC
 
 **Fecha:** 2026-08-27
-**Estado:** diseñado
+**Estado:** implementado (2026-08-28)
 **Actions nuevas:** `com.knupwns.audioknob.discorddeafen`, `com.knupwns.audioknob.discordscreenshare`
 
 ## Problema
@@ -197,20 +197,61 @@ diga si hay token y cuándo vence. Las credenciales van al store de DPAPI vía
 
 ## Riesgos
 
-**Scopes de screen share.** Discord gatea los scopes `rpc.*`. Como dueño de la app
-tenés `rpc` y `rpc.voice.*` sin aprobación. **No está confirmado que otorgue
-`rpc.screenshare.write` a una app nueva**: el client de StreamKit está
-whitelisteado, uno recién creado no. Si Discord lo rechaza, screen share tiene que
-ir por el client de StreamKit y deafen se queda con app propia, o las dos vuelven
-a StreamKit — en cuyo caso las Reglas 1 y 2 siguen siendo el aporte y la
-renovación pasa a ser `AUTHORIZE prompt:none` sobre conexión fresca.
+**Scopes de screen share — resuelto a favor.** Discord otorgó los seis scopes
+pedidos a una app creada por el usuario, incluidos `rpc.screenshare.read` y
+`rpc.screenshare.write`. Verificado contra el string de scope que devolvió
+Discord de verdad (`token.Scope`, leído del token guardado), no contra lo que
+se pidió — ver el reporte de Task 5. No hizo falta ningún rediseño ni caer al
+client de StreamKit para ninguna de las dos teclas.
 
-**Comandos privados.** `TOGGLE_SCREENSHARE` puede cambiar o desaparecer en
-cualquier update de Discord. No hay contrato. Es el mismo riesgo que ya corrés
-hoy con el plugin de HotSpot, ni más ni menos.
+**`redirect_uri` en el exchange de un code emitido por RPC — confirmado.** Con
+`http://localhost` registrado en la app, el canje funciona igual que en un
+flujo OAuth con redirect real, pese a que acá nunca hay una redirección de
+verdad de por medio.
 
-**`redirect_uri` en el exchange de un code emitido por RPC.** Debería aceptar el
-URI registrado; lo confirma el probe antes de que dependa nada de eso.
+**Comandos privados — sigue igual.** `TOGGLE_SCREENSHARE` y
+`SCREENSHARE_STATE_UPDATE` siguen sin contrato documentado — se tomaron del
+bundle de HotSpot, no de nada que Discord publique — y pueden cambiar o
+desaparecer en cualquier update suyo. Es el mismo riesgo que ya se corría con
+el plugin de HotSpot, ni más ni menos.
+
+**El picker de pantalla es de Discord, no hay forma de saltearlo.**
+`TOGGLE_SCREENSHARE` no toma argumentos, y no existe ningún otro comando de
+screenshare en la superficie RPC de Discord — se buscó SCREEN/SOURCE/CAPTURE/
+LIVE/STREAM en todo el bundle del competidor y no apareció nada más.
+Compartir la ventana con foco sin pasar por el diálogo de Discord no es
+posible desde este protocolo: el diálogo es el comportamiento del propio
+Discord frente a ese comando, y el plugin que esto reemplaza hace exactamente
+lo mismo. Automatizarlo implicaría clickear el diálogo de Discord o mandar
+teclas — el tipo de hack a nivel de SO que este proyecto evita a propósito —
+así que el picker queda. Se deja escrito para que nadie lo vuelva a
+investigar.
+
+**El campo `active` de `SCREENSHARE_STATE_UPDATE` sigue sin confirmar.** Se
+tomó del bundle de HotSpot, no de documentación de Discord, y sigue siendo
+una suposición. Task 6 intentó verificarlo dos veces — con Discord abierto
+pero sin llamada de voz activa, y disparando `TOGGLE_SCREENSHARE` por RPC
+fuera de una llamada — y ninguna de las dos hizo aparecer un evento real de
+`SCREENSHARE_STATE_UPDATE` para leer su forma. Confirmarlo de verdad necesita
+una llamada de voz real con pantalla compartida. Si alguna vez el estado de
+la tecla deja de seguir un screen share real, este campo es el primer
+sospechoso — no tratarlo como confirmado hasta entonces.
+
+**`AUTHORIZE` se manda con `prompt: "none"`.** El alta corrió sin diálogo de
+consentimiento para el dueño de la app (Task 5), probablemente porque ya
+existía una concesión previa de ese mismo client en esa cuenta. Un usuario
+que no sea el dueño de la app puede comportarse distinto en su primera
+autorización — no se probó con una cuenta que no fuera la del dueño, y queda
+sin confirmar.
+
+**Correr la suite de tests es seguro hoy — no lo fue siempre.**
+`DiscordTests.exe` redirige el store de credenciales (`DiscordAuth.
+TestStoreOverride`) a un archivo temporal antes de tocar disco. Existe porque
+una corrida anterior, antes de que ese redirect existiera, destruyó una
+credencial viva y funcionando (la suite tiene un test que pisa el store a
+propósito con basura para probar que `Load()` falla sin explotar). Vale la
+pena decirlo explícito: correr `DiscordTests.exe` hoy no toca
+`%LOCALAPPDATA%\StreamDeckAudio\discord.dat`, pero lo hizo una vez.
 
 ## Plan
 
