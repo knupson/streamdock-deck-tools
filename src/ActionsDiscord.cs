@@ -84,6 +84,61 @@ namespace StreamDeckAudio
             foreach (string context in Contexts.Keys.ToList()) Render(context);
         }
 
+        public override void PropertyInspectorAppeared(string context)
+        {
+            PushStatus(context);
+        }
+
+        // "authorize" corre Enroll en un thread de fondo porque Enroll BLOQUEA
+        // mientras Discord muestra el dialogo de consentimiento - potencialmente
+        // varios segundos. Correrlo aca (en el thread que bombea mensajes del
+        // host) congelaria el plugin entero: ninguna otra tecla respondería
+        // hasta que el usuario terminara con el dialogo. Host.Invoke trae el
+        // resultado de vuelta al thread dueno del socket antes de tocarlo o de
+        // redibujar.
+        public override void FromPropertyInspector(string context, Dictionary<string, object> payload)
+        {
+            switch (Json.Str(payload, "command"))
+            {
+                case "getStatus":
+                    PushStatus(context);
+                    return;
+
+                case "authorize":
+                    string clientId = Json.Str(payload, "clientId");
+                    string secret = Json.Str(payload, "clientSecret");
+
+                    var worker = new System.Threading.Thread(() =>
+                    {
+                        string error;
+                        bool ok = DiscordAuth.Enroll(clientId, secret, out error);
+                        Host.Invoke(() =>
+                        {
+                            if (!ok) Log.Write("Discord: alta fallida: " + error);
+                            PushStatus(context);
+                            Render(context);
+                        });
+                    }) { IsBackground = true, Name = "discord-enroll" };
+                    worker.Start();
+                    return;
+            }
+
+            Dictionary<string, object> settings = Json.Dict(payload, "settings");
+            if (settings != null) SettingsChanged(context, settings);
+        }
+
+        // El client secret nunca vuelve al panel: PushStatus solo manda si hay
+        // credencial y cuando vence, nada que identifique la credencial misma.
+        private void PushStatus(string context)
+        {
+            DiscordToken token = DiscordAuth.Load();
+            string status = token == null ? "sin autorizar" : "autorizado";
+            string expires = token == null ? string.Empty : token.ExpiresUtc.ToLocalTime().ToString("g");
+
+            Host.SendToPropertyInspector(context, Uuid,
+                "{\"status\":\"" + Json.Escape(status) + "\",\"expires\":\"" + Json.Escape(expires) + "\"}");
+        }
+
         protected abstract string Artwork();
         protected abstract string Caption();
 
