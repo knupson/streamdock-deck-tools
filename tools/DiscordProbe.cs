@@ -177,56 +177,129 @@ namespace StreamDeckAudio
         // un corte real de Discord (no se puede hacer confiable desde
         // afuera). Necesita Discord corriendo y una credencial enrolada,
         // igual que watch/connect: esto NO es un test offline, es un probe
-        // en vivo. Si el fix esta roto, este comando se cuelga hasta el
-        // timeout de abajo sin nunca llegar a Ready -- Poke() devolveria
-        // temprano para siempre porque _rpc quedaria apuntando a la conexion
-        // muerta que se publico por error.
+        // en vivo.
+        //
+        // Fix round 3, N2: la version anterior solo pedia "vi NoDiscord" y
+        // "eventualmente vi Ready" -- y el codigo CON el bug tambien cumple
+        // las dos, en unos 300ms: Detach anuncia NoDiscord al publicarse el
+        // cadaver, y el mismo Attach que acaba de publicarlo anuncia Ready
+        // dos lineas despues. El unico testigo real de que algo andaba mal
+        // era la brecha de 16s y una linea de log, y las dos las leia yo a
+        // mano despues de correr el comando -- el aserto en si no probaba
+        // nada. Ahora se mide la brecha: Ready tiene que tardar al menos 5s
+        // desde la muerte forzada. Bajo el bug esa brecha es ~0, porque no
+        // hay ningun reintento real de por medio -- es literalmente el mismo
+        // Attach publicando el cadaver y anunciando Ready acto seguido. Con
+        // el fix, la unica forma de llegar a Ready es un Poke() posterior que
+        // pase por Fail (15s de backoff) y reconecte de cero, asi que la
+        // brecha observada ronda los 15-17s. 5s es un piso comodo entre
+        // ambos: muy por encima de lo que el bug podria producir, muy por
+        // debajo del backoff real.
         private static int RaceAttach()
         {
             Console.WriteLine("raceattach: fuerza Disconnected justo antes de publicar _rpc " +
-                               "(Critical 1) y confirma que un intento posterior igual llega a Ready");
+                               "(Critical 1) y exige que Ready tarde al menos 5s desde la muerte forzada");
 
-            DiscordService.TestSimulateDisconnectBeforePublish = true;
+            // Fix round 3, N4: escritos desde el thread de Attach (el hook de
+            // abajo, y el handler de Changed, ambos en threads de fondo) y
+            // leidos desde el loop de este metodo -- la misma discriminacion
+            // de visibilidad que M5 le aplico a DiscordService.State/Deaf/
+            // ScreenSharing. DateTime?/bool no pueden ser volatile aca (el
+            // primero no es de los tipos permitidos, y ambos comparten
+            // invariantes que necesitan actualizarse juntos), asi que un lock
+            // cumple el mismo rol.
+            object sync = new object();
+            bool consumed = false;
+            DateTime? deathObservedUtc = null;
+            DateTime? readyObservedUtc = null;
 
-            bool sawForcedDeath = false;
-            bool reachedReady = false;
+            // One-shot del lado del probe (fix round 3): el hook en
+            // DiscordService ahora solo LEE, nunca apaga el flag -- si lo
+            // hiciera, CS0649 no avisaria en un build sin este archivo (ver
+            // el comentario del campo).
+            //
+            // El timestamp de "muerte forzada" se toma ACA, en el momento
+            // exacto en que el hook dispara -- no infiriendolo de un Announce
+            // con State == NoDiscord. Motivo: N3 corrigio a Detach para que
+            // NO anuncie cuando la conexion todavia no era la oficial (que es
+            // exactamente este caso, la ventana de Critical 1); y el catch de
+            // Attach que sigue llama a Fail(NoDiscord), cuyo dedup
+            // "if (State == state) return" no anuncia nada si State ya
+            // arranco en su default (NoDiscord, un proceso de probe recien
+            // arrancado). Con las dos correcciones N1/N3 en su lugar, un
+            // Changed con State==NoDiscord ya NO esta garantizado para este
+            // evento puntual -- medir en la fuente (este hook) es lo unico
+            // que no depende de esa cadena de anuncios.
+            DiscordService.TestSimulateDisconnectBeforePublish = () =>
+            {
+                lock (sync)
+                {
+                    if (consumed) return false;
+                    consumed = true;
+                    deathObservedUtc = DateTime.UtcNow;
+                }
+                Console.WriteLine(DateTime.Now.ToString("HH:mm:ss.fff") +
+                                   "  *** muerte forzada disparada (seam Critical 1) ***");
+                return true;
+            };
 
             DiscordService.Changed += () =>
             {
+                DiscordLink state = DiscordService.State;
                 Console.WriteLine(DateTime.Now.ToString("HH:mm:ss.fff") +
-                                   "  state=" + DiscordService.State +
+                                   "  state=" + state +
                                    "  deaf=" + DiscordService.Deaf +
                                    "  screensharing=" + DiscordService.ScreenSharing);
-                if (DiscordService.State == DiscordLink.NoDiscord) sawForcedDeath = true;
-                if (DiscordService.State == DiscordLink.Ready) reachedReady = true;
+                if (state == DiscordLink.Ready)
+                {
+                    lock (sync) { if (readyObservedUtc == null) readyObservedUtc = DateTime.UtcNow; }
+                }
             };
 
             // El backoff de Fail() tras la muerte forzada es de 15s; darle
             // margen de sobra para el reintento real (conectar + autenticar
             // contra Discord de verdad) antes de declarar wedge.
             DateTime deadline = DateTime.UtcNow.AddSeconds(40);
-            while (DateTime.UtcNow < deadline && !reachedReady)
+            while (DateTime.UtcNow < deadline)
             {
                 DiscordService.Poke();
                 Thread.Sleep(1000);
+                lock (sync) { if (readyObservedUtc.HasValue) break; }
             }
 
-            if (!sawForcedDeath)
+            DateTime? death, ready;
+            lock (sync) { death = deathObservedUtc; ready = readyObservedUtc; }
+
+            if (!death.HasValue)
             {
                 Console.WriteLine("FALLO: nunca se vio la muerte forzada -- el seam no disparo " +
                                    "(revisar que Discord este corriendo y la credencial enrolada)");
                 return 1;
             }
 
-            if (!reachedReady)
+            if (!ready.HasValue)
             {
                 Console.WriteLine("FALLO: nunca volvio a Ready despues de la muerte forzada -- " +
                                    "wedge permanente, Critical 1 sigue roto");
                 return 1;
             }
 
-            Console.WriteLine("OK: la conexion muerta antes de publicarse no dejo a Poke() colgado; " +
-                               "un intento posterior llego a Ready solo");
+            double gapSeconds = (ready.Value - death.Value).TotalSeconds;
+            Console.WriteLine("brecha muerte forzada -> Ready: " + gapSeconds.ToString("0.0") + "s");
+
+            const double minGapSeconds = 5.0;
+            if (gapSeconds < minGapSeconds)
+            {
+                Console.WriteLine("FALLO: Ready llego a los " + gapSeconds.ToString("0.0") + "s de la muerte " +
+                                   "forzada -- eso es consistente con publicar el cadaver de inmediato (el bug " +
+                                   "de Critical 1), no con un reintento real despues del backoff de 15s. " +
+                                   "Critical 1 NO queda probado como arreglado por esta corrida.");
+                return 1;
+            }
+
+            Console.WriteLine("OK: Ready llego " + gapSeconds.ToString("0.0") + "s despues de la muerte " +
+                               "forzada -- consistente con un reintento real tras el backoff de Fail(), no " +
+                               "con publicar el cadaver de inmediato");
             return 0;
         }
 

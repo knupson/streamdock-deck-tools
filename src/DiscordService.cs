@@ -94,13 +94,25 @@ namespace StreamDeckAudio
         // pipe se cae entre que Subscribe confirma y que Attach publica _rpc)
         // requeriria matar a Discord en el instante exacto entre esas dos
         // lineas, algo que no se puede cronometrar de forma confiable desde
-        // afuera del proceso. Este flag, seteado por DiscordProbe.exe
+        // afuera del proceso. Este hook, seteado por DiscordProbe.exe
         // raceattach, simula el mismo efecto que tendria un Disconnected real
         // llegando justo ahi: dispara la misma logica de "dead" y el mismo
         // Detach que usaria el camino real, asi que ejercita el fix de verdad
-        // en vez de solo simularlo por fuera. One-shot, como el evento real;
-        // nunca se usa fuera de un probe/test.
-        internal static bool TestSimulateDisconnectBeforePublish;
+        // en vez de solo simularlo por fuera.
+        //
+        // Fix round 3: esto era un bool que Attach mismo escribia de vuelta a
+        // false (one-shot). Eso hacia que el compilador SIEMPRE lo viera
+        // asignado dentro de este archivo, asi que CS0649 nunca avisaba --
+        // nada probaba que el hook no pudiera dispararse en produccion una vez
+        // que Task 8 agregue este archivo a las fuentes de DeckTools.exe. Un
+        // Func<bool> que este archivo solo LEE (nunca asigna) restaura esa
+        // garantia exactamente como DiscordAuth.TestStoreOverride: el campo
+        // queda sin asignar en cualquier build que no incluya
+        // tools/DiscordProbe.cs (que es quien lo asigna), y CS0649 vuelve a
+        // avisarlo -- el compilador demostrando la ausencia, no el build
+        // script. El one-shot ahora vive del lado del probe (ver RaceAttach),
+        // no aca: este archivo solo invoca el delegado, nunca lo apaga.
+        internal static Func<bool> TestSimulateDisconnectBeforePublish;
 
         private static void Attach()
         {
@@ -195,11 +207,14 @@ namespace StreamDeckAudio
                 catch (Exception) { }
 
                 // Seam de test para Critical 1 (ver el comentario del campo):
-                // simula el Disconnected real llegando justo antes del lock de
-                // publicacion, reusando el mismo closure/Detach de arriba.
-                if (TestSimulateDisconnectBeforePublish)
+                // solo LEE el hook, nunca lo apaga -- el one-shot es
+                // responsabilidad de quien lo asigna (RaceAttach). Copiado a
+                // una local antes de invocarlo por el mismo motivo que
+                // DiscordRpc copia _pipe a una local: evita una carrera si
+                // alguien lo reasignara mientras esto corre.
+                Func<bool> simulateDisconnect = TestSimulateDisconnectBeforePublish;
+                if (simulateDisconnect != null && simulateDisconnect())
                 {
-                    TestSimulateDisconnectBeforePublish = false; // one-shot, igual que el evento real
                     lock (Gate) { dead = true; }
                     Detach(rpc);
                 }
@@ -210,6 +225,20 @@ namespace StreamDeckAudio
                 // dead=true, no publicamos un cadaver -- lo cerramos (Detach ya
                 // lo hizo, pero Close() es idempotente, ver DiscordRpc) y
                 // pasamos por Fail como cualquier otro intento fallido.
+                //
+                // Fix round 3, N1: State = Ready se decide DENTRO de este
+                // mismo lock, junto con _rpc = rpc, no despues de soltarlo.
+                // Antes vivia afuera: si el pipe moria justo despues de que
+                // este lock se soltara pero antes de esa linea, Detach ya
+                // corria completo (_rpc = null, State = NoDiscord, avisa) y
+                // esta linea lo pisaba con Ready a continuacion -- quedaba
+                // State == Ready con _rpc == null: la tecla se dibuja
+                // "conectada", un toque cae en Send -> Poke sin hacer nada
+                // visible, y sigue asi hasta el proximo intento (>=5s). Se
+                // autocuraba solo, pero mostraba mal durante ese tramo.
+                // Publicar los dos campos bajo el mismo lock que Detach usa
+                // para leerlos hace que quien sea que tome el lock despues
+                // vea una version consistente, nunca a mitad de camino.
                 bool published;
                 lock (Gate)
                 {
@@ -221,6 +250,7 @@ namespace StreamDeckAudio
                     {
                         _rpc = rpc;
                         _connecting = false;
+                        State = DiscordLink.Ready;
                         published = true;
                     }
                 }
@@ -233,7 +263,6 @@ namespace StreamDeckAudio
                     return;
                 }
 
-                State = DiscordLink.Ready;
                 Log.Write("Discord: sesion lista");
                 Announce();
             }
@@ -268,24 +297,38 @@ namespace StreamDeckAudio
         // Recibe la instancia por parametro (fix round 2, Critical 1), no lee
         // _rpc: puede dispararse para una conexion que _rpc todavia no conoce
         // (la ventana de la publicacion tardia) o para la que esta viva hoy.
-        // Solo limpia _rpc si es efectivamente la misma instancia -- idempotente
-        // por instancia, asi que Attach y un Disconnected real nunca se pisan.
         private static void Detach(DiscordRpc which)
         {
+            // Fix round 3, N3: el match (wasLive) se decide UNA vez, bajo
+            // lock, y todo lo que sigue depende de ese resultado ya fijo. La
+            // version anterior guardaba _rpc==which para decidir si limpiar
+            // el campo, pero despues mutaba State y avisaba SIN condicion --
+            // la misma clase de bug que Critical 1, aplicada a medias: un
+            // Detach(A) tardio (la ventana de publicacion, u otra carrera
+            // rara) que ya no coincide con el _rpc actual igual pisaba el
+            // State de una sesion B que si esta viva, y avisaba una
+            // desconexion que no paso.
+            bool wasLive;
             lock (Gate)
             {
-                if (_rpc == which) _rpc = null;
-                _nextAttemptUtc = DateTime.UtcNow.AddSeconds(5);
+                wasLive = (_rpc == which);
+                if (wasLive)
+                {
+                    _rpc = null;
+                    _nextAttemptUtc = DateTime.UtcNow.AddSeconds(5);
+                }
             }
 
-            // Fix round 2, Important 3: antes esto solo nuleaba el campo. El
-            // reader ya salio (por eso estamos aca), asi que no hay leak de
-            // thread, pero el NamedPipeClientStream sin cerrar espera al
-            // finalizer para liberar el handle -- la misma clase de leak que
-            // los comentarios de este archivo y de DiscordRpc.cs ya senalan
-            // en otros tres lugares. Cerrar aca, con la instancia que
-            // recibimos, no con un campo que puede haber cambiado.
+            // Cerrar SIEMPRE, coincida o no (fix round 2, Important 3): esta
+            // instancia especifica ya esta muerta de todas formas, y dejarla
+            // sin cerrar es el mismo leak de handle sin importar si era o no
+            // la conexion "oficial" en _rpc.
             which.Close();
+
+            // Si no coincide, ya hicimos lo unico que le correspondia a ESTA
+            // instancia (cerrarla) y no hay nada mas que decir sobre el
+            // estado de la sesion -- que es de otra conexion, no de esta.
+            if (!wasLive) return;
 
             State = DiscordLink.NoDiscord;
             Log.Write("Discord: sesion caida");
