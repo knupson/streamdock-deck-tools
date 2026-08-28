@@ -68,6 +68,12 @@ Invoke-Csc -Out (Join-Path $bin 'FakeApp.exe') `
            -Sources @('src\AudioCore.cs', 'src\AudioSessions.cs', 'src\Monitors.cs',
                       'src\Labels.cs', 'test\FakeApp.cs')
 
+# Tests offline. No necesitan Discord ni el deck.
+Invoke-Csc -Out (Join-Path $bin 'DiscordTests.exe') `
+           -Sources @('src\AudioCore.cs', 'src\DiscordRpc.cs',
+                      'test\Assert.cs', 'test\DiscordTests.cs') `
+           -Refs @('System.Web.Extensions.dll')
+
 # Icon generator, then the icons themselves.
 $genIcons = Join-Path $bin 'GenIcons.exe'
 Invoke-Csc -Out $genIcons -Sources @('tools\GenIcons.cs') -Refs @('System.Drawing.dll')
