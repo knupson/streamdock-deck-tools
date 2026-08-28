@@ -132,6 +132,65 @@ namespace StreamDeckAudio
             Check.Equal("token vencido renueva", true, dead.NeedsRenewal);
         }
 
+        // Fix final, Important 1: la garantia central de este fix, fijada como
+        // test. Load() NUNCA debe tocar los estaticos _clientId/_clientSecret
+        // -- si lo hiciera, un Load() disparado por Attach (thread
+        // "discord-attach") mientras Enroll() sostiene el par de una app nueva
+        // en curso (thread "discord-enroll", bloqueado hasta 60s en AUTHORIZE)
+        // pisaria esa credencial en vuelo con lo que sea que el store tenia
+        // ANTES de la reautorizacion. Guardado y restaurado via
+        // SetClientCredentials/ClientId, sin red: exactamente lo que este
+        // metodo ya expone para tests (ver CanPersistRejectsMissingRefresh).
+        private static void LoadDoesNotTouchStatics()
+        {
+            Console.WriteLine("purity de Load():");
+
+            DiscordAuth.SetClientCredentials("store-id", "store-secret");
+            DiscordAuth.Save(new DiscordToken
+            {
+                Access = "a", Refresh = "r", ExpiresUtc = DateTime.UtcNow.AddDays(3)
+            });
+
+            // Simula un Enroll() en curso sosteniendo el par de una app B --
+            // el escenario exacto que Important 1 describe.
+            DiscordAuth.SetClientCredentials("inflight-id", "inflight-secret");
+
+            DiscordToken loaded = DiscordAuth.Load();
+
+            Check.Equal("Load() no toca _clientId", "inflight-id", DiscordAuth.ClientId);
+            Check.Equal("pero SI devuelve el clientId guardado, como dato",
+                        "store-id", loaded.ClientId);
+            Check.Equal("y el clientSecret guardado",
+                        "store-secret", loaded.ClientSecret);
+        }
+
+        // AccessToken() es el UNICO lugar que aplica el par leido del store a
+        // los estaticos, y solo cuando no hay nada ya cargado -- ese guard es
+        // lo que efectivamente cierra la carrera de Important 1 (Load() puro
+        // solo no alcanza si el unico llamador que necesita los estaticos los
+        // pisara igual). ExpiresUtc a 4 dias evita la renovacion por red (ver
+        // RenewalWindow) para que este test siga sin tocar la red.
+        private static void AccessTokenAppliesStoredCredsOnlyWhenNothingInFlight()
+        {
+            DiscordAuth.SetClientCredentials("store-id", "store-secret");
+            DiscordAuth.Save(new DiscordToken
+            {
+                Access = "at", Refresh = "rt", ExpiresUtc = DateTime.UtcNow.AddDays(4)
+            });
+
+            DiscordAuth.SetClientCredentials(null, null);
+            DiscordAuth.AccessToken();
+            Check.Equal("sin nada en vuelo, aplica el par del store",
+                        "store-id", DiscordAuth.ClientId);
+
+            DiscordAuth.SetClientCredentials("inflight-id", "inflight-secret");
+            DiscordAuth.AccessToken();
+            Check.Equal("con un Enroll en vuelo, no lo pisa aunque el store diga otra cosa",
+                        "inflight-id", DiscordAuth.ClientId);
+
+            DiscordAuth.SetClientCredentials(null, null);
+        }
+
         // Regla 1. Este es el bug de HotSpot, escrito como test.
         private static void FailedRenewalKeepsOldToken()
         {
@@ -237,6 +296,8 @@ namespace StreamDeckAudio
                 TokenRoundTrip();
                 SaveOverwritesExistingStore();
                 RenewalWindow();
+                LoadDoesNotTouchStatics();
+                AccessTokenAppliesStoredCredsOnlyWhenNothingInFlight();
                 FailedRenewalKeepsOldToken();
                 BackfillRefreshFillsOmittedToken();
                 BackfillRefreshKeepsFreshToken();

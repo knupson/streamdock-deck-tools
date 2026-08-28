@@ -32,6 +32,16 @@ namespace StreamDeckAudio
         // apaga con la ultima que desaparece, igual que Contexts se vacia.
         private bool _subscribed;
 
+        // Fix final, Important 4: el mensaje de una alta fallida (o de una
+        // REalta fallida, mientras la credencial vieja sigue "autorizada")
+        // solo vivia en un Log.Write -- el panel se quedaba mudo. Guardado por
+        // instancia de accion, no por context: son las dos unicas que llaman a
+        // Enroll con el mismo par de campos del panel, asi que un intento
+        // vale para toda la accion. Solo se toca desde el thread del host (el
+        // callback de "authorize" via Host.Invoke, y PushStatus), nunca desde
+        // el thread de fondo que corre Enroll.
+        private string _lastError;
+
         protected override bool DefaultsToKnob { get { return false; } }
         public override bool WantsTick { get { return Contexts.Count > 0; } }
 
@@ -112,9 +122,21 @@ namespace StreamDeckAudio
                     {
                         string error;
                         bool ok = DiscordAuth.Enroll(clientId, secret, out error);
+
+                        // Fix final, Important 2: corre ANTES de Host.Invoke,
+                        // en este mismo thread de fondo ("discord-enroll"), a
+                        // proposito -- Reauthorized() puede llamar a Detach(),
+                        // que hace Close() con join acotado (hasta 2s) sobre
+                        // el reader viejo. Ese bloqueo tiene que pasar lejos
+                        // del thread dueno del socket del host, exactamente
+                        // la misma razon por la que Enroll ya corre aca y no
+                        // en el thread de mensajes.
+                        if (ok) DiscordService.Reauthorized();
+
                         Host.Invoke(() =>
                         {
                             if (!ok) Log.Write("Discord: alta fallida: " + error);
+                            _lastError = ok ? null : error;
                             PushStatus(context);
                             Render(context);
                         });
@@ -129,18 +151,37 @@ namespace StreamDeckAudio
 
         // El client secret nunca vuelve al panel: PushStatus solo manda si hay
         // credencial y cuando vence, nada que identifique la credencial misma.
+        // DiscordAuth.Load() es puro (fix final, Important 1): llamarlo aca --
+        // cada vez que se abre el panel, o despues de cada intento de alta --
+        // ya no reapunta las credenciales de renovacion solo por leer el store.
         private void PushStatus(string context)
         {
             DiscordToken token = DiscordAuth.Load();
             string status = token == null ? "sin autorizar" : "autorizado";
             string expires = token == null ? string.Empty : token.ExpiresUtc.ToLocalTime().ToString("g");
 
+            // Fix final, Important 4: _lastError viene de DiscordAuth.Enroll,
+            // que a su vez lo arma solo a partir del cuerpo de RESPUESTA de
+            // Discord (rpc.Request/Exchange) -- nunca del cuerpo de REQUEST,
+            // que es el unico lugar donde viaja el client secret (ver el
+            // comentario sobre esto en DiscordAuth.PostToken). Ningun secreto
+            // puede llegar a este JSON por esta via.
+            string error = _lastError ?? string.Empty;
+
             Host.SendToPropertyInspector(context, Uuid,
-                "{\"status\":\"" + Json.Escape(status) + "\",\"expires\":\"" + Json.Escape(expires) + "\"}");
+                "{\"status\":\"" + Json.Escape(status) + "\",\"expires\":\"" + Json.Escape(expires) +
+                "\",\"error\":\"" + Json.Escape(error) + "\"}");
         }
 
         protected abstract string Artwork();
         protected abstract string Caption();
+
+        // Fix final, MINOR: default compartido por las dos teclas mientras
+        // Discord esta cerrado o sin permiso. ScreenShareAction lo overridea
+        // con "share-off" -- sin esto, esa tecla dibujaba auriculares tachados
+        // (el arte de la OTRA accion) cada vez que Discord estaba cerrado,
+        // porque Render() tenia "headphones-deaf" a fuego para las dos.
+        protected virtual string OfflineArtwork() { return "headphones-deaf"; }
 
         protected override void Render(string context)
         {
@@ -151,9 +192,10 @@ namespace StreamDeckAudio
 
                 switch (DiscordService.State)
                 {
-                    case DiscordLink.NoDiscord: art = "headphones-deaf"; caption = "Sin Discord"; break;
-                    case DiscordLink.NoAuth:    art = "headphones-deaf"; caption = "Sin permiso"; break;
-                    default:                    art = Artwork();         caption = Caption();     break;
+                    case DiscordLink.NoDiscord:     art = OfflineArtwork(); caption = "Sin Discord";  break;
+                    case DiscordLink.NoAuth:        art = OfflineArtwork(); caption = "Sin permiso";  break;
+                    case DiscordLink.RenewalFailed: art = OfflineArtwork(); caption = "Sin conexion";  break;
+                    default:                        art = Artwork();         caption = Caption();     break;
                 }
 
                 // Redibujar un tile que no cambio inundaria el socket una vez
@@ -182,7 +224,7 @@ namespace StreamDeckAudio
         public override void Press(string context)
         {
             if (DiscordService.State != DiscordLink.Ready) { Host.ShowAlert(context); return; }
-            DiscordService.SetDeaf(!DiscordService.Deaf);
+            DiscordService.SetDeaf(!DiscordService.Deaf, context, Host.ShowAlert);
         }
 
         protected override string Artwork()
@@ -203,7 +245,7 @@ namespace StreamDeckAudio
         public override void Press(string context)
         {
             if (DiscordService.State != DiscordLink.Ready) { Host.ShowAlert(context); return; }
-            DiscordService.ToggleScreenShare();
+            DiscordService.ToggleScreenShare(context, Host.ShowAlert);
         }
 
         protected override string Artwork()
@@ -215,5 +257,10 @@ namespace StreamDeckAudio
         {
             return DiscordService.ScreenSharing ? "En vivo" : "Pantalla";
         }
+
+        // share-off.png ya existe y es el arte "inactivo" normal de esta
+        // tecla; reusarlo tambien para offline evita el auricular tachado
+        // ajeno que Render() dibujaba antes para las dos acciones por igual.
+        protected override string OfflineArtwork() { return "share-off"; }
     }
 }

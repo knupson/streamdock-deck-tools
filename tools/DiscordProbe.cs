@@ -7,8 +7,6 @@
 //   DiscordProbe.exe enroll <client-id> <client-secret>
 //   DiscordProbe.exe status
 //   DiscordProbe.exe refresh [client-id client-secret]
-//   DiscordProbe.exe deafen
-//   DiscordProbe.exe screenshare
 //   DiscordProbe.exe watch
 //   DiscordProbe.exe raceattach
 
@@ -95,7 +93,17 @@ namespace StreamDeckAudio
                 return 1;
             }
 
+            // MINOR: sin este null check, un store ilegible justo despues de
+            // una alta que SI salio bien (Enroll ya hizo su propio Save())
+            // convertia un exito en un NullReferenceException crudo -- Load()
+            // puede devolver null por cualquier motivo de I/O/DPAPI ajeno a si
+            // el alta funciono, ver su comentario.
             DiscordToken token = DiscordAuth.Load();
+            if (token == null)
+            {
+                Console.WriteLine("alta ok, pero el store no se pudo releer para mostrar el detalle (ver log)");
+                return 0;
+            }
             Console.WriteLine("alta ok");
             Console.WriteLine("  vence:  " + token.ExpiresUtc.ToLocalTime());
             Console.WriteLine("  refresh: " + (string.IsNullOrEmpty(token.Refresh) ? "NO" : "si"));
@@ -116,6 +124,9 @@ namespace StreamDeckAudio
 
         private static int Status()
         {
+            // Solo lectura para mostrar en pantalla: Load() es puro (Important
+            // 1), asi que este comando nunca reapunta las credenciales de
+            // renovacion como efecto colateral de haber sido invocado.
             DiscordToken token = DiscordAuth.Load();
             if (token == null) { Console.WriteLine("sin credenciales"); return 1; }
 
@@ -126,12 +137,17 @@ namespace StreamDeckAudio
         }
 
         // AccessToken() es la misma ruta que usa el plugin en runtime: si esto
-        // renueva bien aca, renueva bien alla. client-id/secret son opcionales:
-        // cada invocacion del probe es un proceso nuevo, asi que las credenciales
-        // que Enroll seteo en memoria no sobreviven -- si el token todavia no
-        // necesita renovarse esto alcanza igual (AccessToken devuelve el access
-        // guardado sin tocar la red), pero para forzar una renovacion real
-        // (Step 5 del brief, con el token vencido a mano) hacen falta de nuevo.
+        // renueva bien aca, renueva bien alla. client-id/secret son opcionales
+        // -- pero, a diferencia de antes del fix de Important 1, YA NO son
+        // inertes cuando el store tiene credenciales: AccessToken() ahora solo
+        // aplica el clientId/clientSecret del store si _clientId todavia esta
+        // vacio (Load() en si es puro, no toca nada). SetClientCredentials de
+        // aca abajo corre ANTES de esa lectura, asi que si se pasan por
+        // argumento GANAN sobre lo que haya en disco -- exactamente lo que
+        // hace falta para forzar una renovacion real (Step 5 del brief) contra
+        // un client-id/secret especifico, distinto del guardado. Sin
+        // argumentos, y como cada invocacion del probe es un proceso nuevo sin
+        // nada cargado todavia, el par del store se aplica solo.
         private static int Refresh(string[] args)
         {
             if (args.Length >= 3) DiscordAuth.SetClientCredentials(args[1], args[2]);

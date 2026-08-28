@@ -19,7 +19,13 @@ using System.Threading;
 
 namespace StreamDeckAudio
 {
-    internal enum DiscordLink { NoDiscord, NoAuth, Ready }
+    // RenewalFailed agregado en el fix final, MINOR (~150): AccessToken()
+    // devolvia null tanto para "nunca hubo credencial" como para "habia una
+    // pero la renovacion no se pudo intentar ahora" (red caida, por ejemplo),
+    // y las dos colapsaban en NoAuth -- la tecla le pedia reautorizar a un
+    // usuario cuya autorizacion estaba perfectamente bien. Ready y NoDiscord no
+    // cambian de significado.
+    internal enum DiscordLink { NoDiscord, NoAuth, RenewalFailed, Ready }
 
     internal static class DiscordService
     {
@@ -146,11 +152,39 @@ namespace StreamDeckAudio
 
             try
             {
-                string token = DiscordAuth.AccessToken();
-                if (string.IsNullOrEmpty(token)) { Fail(DiscordLink.NoAuth); return; }
+                bool hadStoredCredential;
+                string token = DiscordAuth.AccessToken(out hadStoredCredential);
+                if (string.IsNullOrEmpty(token))
+                {
+                    // hadStoredCredential distingue las dos formas de "no hay
+                    // token": si nunca hubo credencial guardada, es NoAuth de
+                    // verdad (hay que autorizar). Si SI la habia pero no se
+                    // pudo renovar ahora (red caida, por ejemplo), reautorizar
+                    // no arregla nada -- RenewalFailed evita mandar al usuario
+                    // a resolver un problema que no tiene.
+                    Fail(hadStoredCredential ? DiscordLink.RenewalFailed : DiscordLink.NoAuth);
+                    return;
+                }
+
+                // Guard, MINOR (~153): un record del store escrito ANTES de que
+                // Task 6 agregara clientId/clientSecret da un token valido pero
+                // con ClientId null (Load() no inventa uno), asi que
+                // AccessToken() nunca tiene nada que aplicarle a este estatico.
+                // Sin este chequeo, Connect(null) manda un client_id vacio,
+                // Discord contesta CLOSE, y el catch de mas abajo lo reporta
+                // como NoDiscord -- "Discord no esta corriendo" para lo que en
+                // realidad es una credencial legada sin client id: el usuario
+                // termina buscando el problema en el lugar equivocado.
+                string clientId = DiscordAuth.ClientId;
+                if (string.IsNullOrEmpty(clientId))
+                {
+                    Log.Write("Discord: token sin client id asociado (store legado); hace falta reautorizar");
+                    Fail(DiscordLink.NoAuth);
+                    return;
+                }
 
                 rpc = new DiscordRpc();
-                if (!rpc.Connect(DiscordAuth.ClientId)) { Fail(DiscordLink.NoDiscord); return; }
+                if (!rpc.Connect(clientId)) { Fail(DiscordLink.NoDiscord); return; }
 
                 try
                 {
@@ -286,12 +320,26 @@ namespace StreamDeckAudio
 
         // Backoff para no golpear el pipe una vez por segundo cuando Discord
         // esta cerrado, que es la mayor parte del tiempo.
+        //
+        // MINOR (~293): la escritura de State ahora vive DENTRO del mismo lock
+        // que decide si cambio, igual que el round 3 ya hizo con la de Attach.
+        // Ningun torn view era alcanzable con la version anterior (State es
+        // volatile y el unico lector fuera de lock solo compara, nunca decide
+        // sobre un valor a medio escribir), pero mezclar "escribe bajo lock" en
+        // un lugar y "escribe afuera" en otro del mismo archivo es la clase de
+        // inconsistencia que hace que la proxima ronda de fix tenga que volver
+        // a probar lo que ya deberia estar asentado.
         private static void Fail(DiscordLink state)
         {
-            lock (Gate) { _connecting = false; _nextAttemptUtc = DateTime.UtcNow.AddSeconds(15); }
-            if (State == state) return;
-            State = state;
-            Announce();
+            bool changed;
+            lock (Gate)
+            {
+                _connecting = false;
+                _nextAttemptUtc = DateTime.UtcNow.AddSeconds(15);
+                changed = (State != state);
+                if (changed) State = state;
+            }
+            if (changed) Announce();
         }
 
         // Recibe la instancia por parametro (fix round 2, Critical 1), no lee
@@ -308,6 +356,12 @@ namespace StreamDeckAudio
             // rara) que ya no coincide con el _rpc actual igual pisaba el
             // State de una sesion B que si esta viva, y avisaba una
             // desconexion que no paso.
+            // MINOR (~333): State se escribe DENTRO de este mismo lock ahora,
+            // no despues de soltarlo -- misma disciplina que Fail() y que el
+            // round 3 ya le aplico a Attach. Ningun torn view era alcanzable
+            // antes (mismo razonamiento que en Fail()), pero consistencia
+            // entre los tres sitios que escriben State es lo que hace que la
+            // regla sea facil de verificar de un vistazo.
             bool wasLive;
             lock (Gate)
             {
@@ -316,6 +370,7 @@ namespace StreamDeckAudio
                 {
                     _rpc = null;
                     _nextAttemptUtc = DateTime.UtcNow.AddSeconds(5);
+                    State = DiscordLink.NoDiscord;
                 }
             }
 
@@ -330,9 +385,45 @@ namespace StreamDeckAudio
             // estado de la sesion -- que es de otra conexion, no de esta.
             if (!wasLive) return;
 
-            State = DiscordLink.NoDiscord;
             Log.Write("Discord: sesion caida");
             Announce();
+        }
+
+        /// <summary>
+        /// Fix final, Important 2: un Enroll() exitoso antes no le decia nada a
+        /// la sesion -- solo redibujaba el panel. Con sesion viva, la conexion
+        /// seguia usando el token viejo hasta que algo la reiniciara; con la
+        /// sesion caida (alta inicial), el ultimo Fail(NoAuth) habia dejado
+        /// hasta 15s de backoff, asi que la tecla se quedaba en "Sin permiso"
+        /// hasta 15s despues de una autorizacion que ya habia salido bien --
+        /// la primera impresion del feature. Llamar esto desde el callback de
+        /// alta arregla las dos ramas: limpia el backoff bajo Gate, tira abajo
+        /// cualquier _rpc vivo reusando Detach (mismo camino de cierre que ya
+        /// evita el leak de handle/thread), y pokea una vez para que Attach
+        /// arranque de cero con la credencial recien guardada.
+        /// </summary>
+        public static void Reauthorized()
+        {
+            DiscordRpc current;
+            lock (Gate) { current = _rpc; }
+
+            // Detach cierra la conexion vieja (Close(), sin leak) y limpia
+            // _rpc/State bajo Gate; si la sesion ya estaba caida no hay nada
+            // que tirar abajo. OJO con el orden: Detach, cuando SI habia una
+            // conexion viva, fija su propio _nextAttemptUtc a +5s (su backoff
+            // normal de reconexion) -- si el reset de abajo corriera ANTES de
+            // esto, Detach lo pisaria y la reautorizacion con sesion viva
+            // terminaria esperando esos 5s de todas formas, exactamente el
+            // retraso que este metodo existe para eliminar.
+            if (current != null) Detach(current);
+
+            // Limpia el backoff DESPUES de Detach, no antes: cubre tanto el
+            // +5s que Detach acaba de fijar (sesion viva) como el +15s que un
+            // Fail(NoAuth) anterior pudo haber dejado (alta inicial, sesion ya
+            // caida) -- las dos ramas de Important 2 quedan sin espera extra.
+            lock (Gate) { _nextAttemptUtc = DateTime.MinValue; }
+
+            Poke();
         }
 
         // Corre en el thread lector de DiscordRpc (ver el comentario sobre
@@ -386,20 +477,39 @@ namespace StreamDeckAudio
             if (State == DiscordLink.Ready) Announce();
         }
 
-        public static void SetDeaf(bool on)
+        // context/onFailed dejan que el llamador (una accion, que tiene Host)
+        // decida como avisar sin que este archivo sepa nada de IHost -- fix
+        // final, Important 3. Mantenido deliberadamente al ras: no arma una
+        // cola de notificaciones, solo pasa el context de vuelta hasta el
+        // unico callback que la accion ya tenia (Host.ShowAlert).
+        public static void SetDeaf(bool on, string context, Action<string> onFailed)
         {
-            Send(rpc => rpc.Request("SET_VOICE_SETTINGS",
+            Send(context, onFailed, rpc => rpc.Request("SET_VOICE_SETTINGS",
                                     new Dictionary<string, object> { { "deaf", on } }, 5000));
         }
 
-        public static void ToggleScreenShare()
+        public static void ToggleScreenShare(string context, Action<string> onFailed)
         {
-            Send(rpc => rpc.Request("TOGGLE_SCREENSHARE", null, 5000));
+            Send(context, onFailed, rpc => rpc.Request("TOGGLE_SCREENSHARE", null, 5000));
         }
 
         // Los comandos salen en un thread aparte: el hilo del host no puede
         // quedarse esperando a Discord.
-        private static void Send(Action<DiscordRpc> work)
+        //
+        // Fix final, Important 3: antes el catch solo logueaba. Eso alcanzaba
+        // cuando el PIPE moria (Disconnected -> Detach ya reconstruye), pero no
+        // cuando Discord contesta un frame ERROR sobre un pipe que sigue
+        // abierto -- el disparador obvio es el access token venciendo a mitad
+        // de sesion, porque Attach solo lo busca una vez, asi que una sesion
+        // que sigue Ready mas alla de la vida del token nunca lo renueva.
+        // UnwrapReply tira DiscordRpcException en ese caso, el catch de antes
+        // se limitaba a loguear, _rpc seguia sin null, Poke() seguia volviendo
+        // temprano para siempre, y State se quedaba en Ready: la tecla dibuja
+        // "conectada" y no hace nada, exactamente la forma de bug que esta
+        // rama existe para eliminar. Detach(rpc) tira la sesion abajo por el
+        // mismo camino que ya usa Disconnected (sin leak de handle/thread), asi
+        // que el proximo Poke la reconstruye con un token recien pedido.
+        private static void Send(string context, Action<string> onFailed, Action<DiscordRpc> work)
         {
             DiscordRpc rpc;
             lock (Gate) { rpc = _rpc; }
@@ -407,8 +517,26 @@ namespace StreamDeckAudio
 
             var worker = new Thread(() =>
             {
-                try { work(rpc); }
-                catch (Exception ex) { Log.Write("Discord: comando fallo: " + ex.Message); }
+                try
+                {
+                    work(rpc);
+                }
+                catch (DiscordRpcException ex)
+                {
+                    Log.Write("Discord: comando fallo, se cae la sesion: " + ex.Message);
+                    Detach(rpc);
+                    if (onFailed != null) onFailed(context);
+                }
+                catch (Exception ex)
+                {
+                    // No es un fallo de protocolo (WriteFrameOrThrow ya
+                    // traduce los casos de pipe muerto a DiscordRpcException,
+                    // ver su comentario en DiscordRpc.cs) -- se avisa igual,
+                    // pero no hay motivo para asumir la sesion muerta, asi que
+                    // se deja como esta.
+                    Log.Write("Discord: comando fallo: " + ex.Message);
+                    if (onFailed != null) onFailed(context);
+                }
             }) { IsBackground = true };
             worker.Start();
         }

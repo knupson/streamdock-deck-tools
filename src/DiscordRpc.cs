@@ -202,7 +202,13 @@ namespace StreamDeckAudio
             DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
             lock (_gate)
             {
-                while (!_handshakeReady && !_handshakeClosed)
+                // !_closing en la condicion es lo que hace que el PulseAll de
+                // Close() (MINOR ~474) sirva de algo: sin chequear el mismo
+                // campo que Close() pulsea, despertarse antes no cambia nada
+                // -- el loop volveria a esperar hasta el timeout igual. Con
+                // esto, un Close() concurrente hace que este metodo devuelva
+                // false de inmediato en vez de agotar los 5s completos.
+                while (!_handshakeReady && !_handshakeClosed && !_closing)
                 {
                     var left = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
                     if (left <= 0) return false;
@@ -395,6 +401,14 @@ namespace StreamDeckAudio
                     Dictionary<string, object> reply;
                     if (_replies.TryGetValue(nonce, out reply)) { _replies.Remove(nonce); return reply; }
 
+                    // Mismo motivo que en WaitForHandshake: sin este chequeo el
+                    // PulseAll que Close() ahora hace no cambia nada, porque
+                    // esta condicion nunca miraba _closing. null aca cae en el
+                    // mismo "sin respuesta" que UnwrapReply ya sabe manejar
+                    // para un timeout comun -- no es un camino nuevo, solo mas
+                    // rapido.
+                    if (_closing) return null;
+
                     var left = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
                     if (left <= 0) return null;
                     Monitor.Wait(_gate, left);
@@ -473,7 +487,13 @@ namespace StreamDeckAudio
 
         public void Close()
         {
-            lock (_gate) { _closing = true; }
+            // MINOR (~474): faltaba el PulseAll que toda otra transicion de
+            // estado en este archivo hace bajo _gate. Sin el, un caller
+            // parado en WaitFor/WaitForHandshake justo cuando Close() corre
+            // se queda esperando su timeout entero (hasta 60s en un
+            // AUTHORIZE) en vez de fallar rapido -- Close() no le avisaba a
+            // nadie que ya no tenia sentido seguir esperando.
+            lock (_gate) { _closing = true; Monitor.PulseAll(_gate); }
 
             // Trabajar sobre locales, no sobre los campos: un Request/Subscribe
             // concurrente que ya paso el chequeo de null puede estar a mitad de

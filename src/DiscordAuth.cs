@@ -21,6 +21,14 @@ namespace StreamDeckAudio
         public string Scope;
         public DateTime ExpiresUtc;
 
+        // Poblados por Load() a partir del record en disco, SOLO como datos de
+        // retorno -- Load() en si no los aplica a los estaticos _clientId/
+        // _clientSecret (ver el comentario de Load() y el de AccessToken(),
+        // fix round final Important 1). Null en un record legado que se guardo
+        // antes de que Task 6 agregara estos campos al store.
+        public string ClientId;
+        public string ClientSecret;
+
         // 7 dias es un supuesto sobre el lifetime real de los tokens de Discord,
         // no algo que leamos del token: no hay issued-at en el store, asi que
         // no hay forma de calcular el 80% transcurrido de verdad. Estas dos
@@ -142,8 +150,41 @@ namespace StreamDeckAudio
                 File.Delete(StorePath);
                 File.Move(temporary, StorePath);
             }
+            catch (Exception ex)
+            {
+                // Cualquier otra excepcion (permisos, algo especifico del
+                // filesystem) deja el .tmp huerfano al lado del store: sellado
+                // con DPAPI igual que el store real, asi que no expone nada,
+                // pero se acumula para siempre si nadie lo borra. Best-effort:
+                // limpiarlo y dejar subir la excepcion original -- el mismo
+                // contrato que un caller de Save() ya tiene que poder manejar.
+                Log.Write("Discord: File.Replace fallo de forma inesperada: " + ex.Message);
+                try { File.Delete(temporary); } catch (Exception) { }
+                throw;
+            }
         }
 
+        // PURO: nunca toca _clientId/_clientSecret. Round final, Important 1 --
+        // antes escribia esos estaticos como efecto secundario cada vez que se
+        // leia el store, y Load() se llama desde todos lados: AccessToken()
+        // (thread "discord-attach", cada Poke que encuentra la sesion caida) Y
+        // PushStatus (thread del host, cada vez que se abre el panel). Enroll()
+        // corre en su propio thread ("discord-enroll") y sostiene ese MISMO par
+        // de estaticos durante todo un AUTHORIZE que bloquea hasta 60s mientras
+        // el usuario esta con el dialogo de Discord. Nada serializaba esas dos
+        // escrituras: con la sesion caida (Poke reintentando Attach cada 15s) y
+        // el usuario reautorizando con una app nueva, un Load() disparado desde
+        // Attach a mitad de ese AUTHORIZE pisaba los estaticos de vuelta a la
+        // app vieja -- Exchange terminaba mandando el code de la app nueva con
+        // el client_id/secret de la app vieja, Discord lo rechazaba, y en la
+        // ventana angosta entre que Exchange volvia y Save() corria, el store
+        // podia quedar con el token nuevo al lado de credenciales que no le
+        // corresponden: invalid_client para siempre, exactamente la muerte
+        // permanente que este proyecto existe para evitar. Ahora Load() solo
+        // LEE y devuelve; el unico lugar que aplica el par leido a los
+        // estaticos es AccessToken(), y solo cuando no hay nada ya cargado (ver
+        // su comentario) -- para que un Enroll en vuelo nunca pueda ser pisado
+        // por una lectura concurrente que ni siquiera lo necesitaba.
         public static DiscordToken Load()
         {
             try
@@ -159,21 +200,18 @@ namespace StreamDeckAudio
                 // escrito por una version anterior de este archivo no los tiene,
                 // y Json.Str devuelve null para una clave ausente -- no hay nada
                 // que parsear ni que tire, asi que un store viejo se sigue
-                // leyendo igual que antes, solo que sin poblar las credenciales.
-                string clientId = Json.Str(record, "clientId");
-                string clientSecret = Json.Str(record, "clientSecret");
-                if (!string.IsNullOrEmpty(clientId) && !string.IsNullOrEmpty(clientSecret))
-                {
-                    SetClientCredentials(clientId, clientSecret);
-                }
-
+                // leyendo igual que antes, solo que con estos dos campos en null
+                // en el token devuelto (ver el guard de client id ausente en
+                // DiscordService.Attach).
                 return new DiscordToken
                 {
                     Access = Json.Str(record, "access"),
                     Refresh = Json.Str(record, "refresh"),
                     Scope = Json.Str(record, "scope"),
                     ExpiresUtc = DateTime.Parse(Json.Str(record, "expires"), null,
-                                                System.Globalization.DateTimeStyles.RoundtripKind)
+                                                System.Globalization.DateTimeStyles.RoundtripKind),
+                    ClientId = Json.Str(record, "clientId"),
+                    ClientSecret = Json.Str(record, "clientSecret")
                 };
             }
             catch (Exception ex)
@@ -205,8 +243,41 @@ namespace StreamDeckAudio
         /// </summary>
         public static string AccessToken()
         {
+            bool hadStoredCredential;
+            return AccessToken(out hadStoredCredential);
+        }
+
+        /// <summary>
+        /// Igual que el overload de arriba, pero le informa al llamador si HUBO
+        /// una credencial guardada. DiscordService.Attach la necesita para no
+        /// confundir "nunca hubo credencial" (hay que autorizar) con "habia una
+        /// pero no se pudo renovar ahora" (la red estaba caida, por ejemplo) --
+        /// sin esto la tecla le pedia reautorizar a un usuario cuya autorizacion
+        /// estaba perfectamente bien (ver la lista MINOR del review final).
+        /// </summary>
+        public static string AccessToken(out bool hadStoredCredential)
+        {
             DiscordToken token = Load();
+            hadStoredCredential = token != null;
             if (token == null) return null;
+
+            // Load() es puro (ver su comentario): este es el UNICO lugar que
+            // aplica el clientId/clientSecret leido del store a los estaticos
+            // que PostToken usa para renovar, y solo cuando _clientId todavia
+            // esta vacio. Si ya hay algo cargado -- un Enroll() en curso en el
+            // thread "discord-enroll", sosteniendo el par de la app nueva
+            // mientras AUTHORIZE bloquea hasta 60s, o una llamada anterior a
+            // este mismo metodo -- dejarlo como esta es lo que cierra la
+            // carrera de Important 1: un Attach concurrente ya no puede pisar
+            // credenciales de una reautorizacion en vuelo solo por haber leido
+            // el store un instante antes de que Save() terminara de escribir la
+            // credencial nueva.
+            if (string.IsNullOrEmpty(_clientId) && !string.IsNullOrEmpty(token.ClientId) &&
+                !string.IsNullOrEmpty(token.ClientSecret))
+            {
+                SetClientCredentials(token.ClientId, token.ClientSecret);
+            }
+
             if (!token.NeedsRenewal) return token.Access;
 
             DiscordToken renewed = TryRefresh(token);

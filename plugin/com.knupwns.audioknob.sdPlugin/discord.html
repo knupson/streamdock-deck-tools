@@ -39,6 +39,15 @@
     a { color: var(--accent); }
 
     #status { color: var(--text); }
+
+    /* Solo derivado del cuerpo de RESPUESTA de Discord (ver el comentario en
+       ActionsDiscord.PushStatus) -- nunca puede traer un secreto. */
+    #error {
+      margin-top: 4px;
+      color: #e0736c;
+      font-size: 8pt;
+      line-height: 1.4;
+    }
   </style>
 </head>
 
@@ -63,6 +72,11 @@
     <div class="value" id="status">cargando…</div>
   </div>
 
+  <div class="row">
+    <div class="label"></div>
+    <div class="value" id="error"></div>
+  </div>
+
   <p class="hint">
     Creá la app en
     <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer">
@@ -84,11 +98,20 @@
     const clientSecretInput = document.getElementById('clientSecret');
     const authorizeButton = document.getElementById('authorize');
     const statusDiv = document.getElementById('status');
+    const errorDiv = document.getElementById('error');
 
     function renderStatus(payload) {
       const status = (payload && payload.status) || 'sin autorizar';
       const expires = payload && payload.expires;
       statusDiv.textContent = expires ? (status + ' - vence ' + expires) : status;
+
+      // error solo aparece cuando una alta (o re-alta) fallo -- ver
+      // ActionsDiscord.PushStatus. Si Load() sigue encontrando una credencial
+      // vieja, status arriba puede seguir diciendo "autorizado" mientras esto
+      // explica que la ULTIMA autorizacion en particular no funciono.
+      const error = payload && payload.error;
+      errorDiv.textContent = error || '';
+      errorDiv.style.display = error ? '' : 'none';
     }
 
     function authorize() {
