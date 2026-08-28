@@ -205,6 +205,75 @@ namespace StreamDeckAudio
                 "&redirect_uri=" + Uri.EscapeDataString(redirectUri));
         }
 
+        /// <summary>
+        /// Alta: AUTHORIZE por RPC, y el code que devuelve se canjea por HTTPS.
+        ///
+        /// Abre su propia conexion RPC y la cierra al terminar. Discord rechaza un
+        /// segundo AUTHORIZE sobre una conexion ya autenticada con "Already
+        /// authenticated", que es lo que dejo muerto al plugin de HotSpot.
+        /// </summary>
+        public static bool Enroll(string clientId, string clientSecret, out string error)
+        {
+            error = null;
+            SetClientCredentials(clientId, clientSecret);
+
+            var rpc = new DiscordRpc();
+            if (!rpc.Connect(clientId))
+            {
+                error = "Discord no esta corriendo";
+                return false;
+            }
+
+            try
+            {
+                var args = new Dictionary<string, object>
+                {
+                    { "client_id", clientId },
+                    { "scopes", Scopes },
+                    { "prompt", "none" }
+                };
+
+                Dictionary<string, object> data = rpc.Request("AUTHORIZE", args, 60000);
+                string code = Json.Str(data, "code");
+                if (string.IsNullOrEmpty(code)) { error = "AUTHORIZE no devolvio code"; return false; }
+
+                DiscordToken token = Exchange(code, RedirectUri);
+
+                // Misma regla que CanPersist aplica en AccessToken(): una credencial
+                // sin refresh token no se puede renovar nunca, asi que guardarla es
+                // indistinguible de perder la capacidad de renovar desde el dia cero
+                // -- el mismo bug de HotSpot, pero en la alta en vez de en la
+                // renovacion. Alla arriba TryRefresh/BackfillRefresh siempre tienen
+                // un refresh token anterior para heredar si Discord omite uno nuevo;
+                // aca no hay ningun refresh previo del cual heredar, asi que si
+                // Exchange vuelve sin refresh_token no hay nada que hacer salvo
+                // fallar la alta.
+                if (!CanPersist(token))
+                {
+                    error = "Discord no devolvio refresh_token en el alta; no se puede persistir una credencial que nunca podria renovarse";
+                    return false;
+                }
+
+                Save(token);
+                Log.Write("Discord: alta ok, scopes concedidos: " + token.Scope);
+                return true;
+            }
+            catch (DiscordRpcException ex)
+            {
+                error = "RPC " + ex.Code + ": " + ex.Message;
+                return false;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+            finally
+            {
+                rpc.Close();
+            }
+        }
+
         private static DiscordToken TryRefresh(DiscordToken token)
         {
             if (token == null || string.IsNullOrEmpty(token.Refresh)) return null;
