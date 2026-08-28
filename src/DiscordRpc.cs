@@ -76,9 +76,14 @@ namespace StreamDeckAudio
             return true;
         }
 
+        // Compartido con PluginHost.cs: un JavaScriptSerializer por proceso alcanza,
+        // no hay estado que lo haga inseguro entre llamadas concurrentes.
         private static readonly JavaScriptSerializer Serializer = new JavaScriptSerializer();
 
-        private NamedPipeClientStream _pipe;
+        // Volatile: el reader thread la lee en su loop principal mientras Close()
+        // la pone en null desde otro thread; sin esto no hay garantia de que el
+        // reader vea el null (solo funciona por casualidad en x64).
+        private volatile NamedPipeClientStream _pipe;
         private Thread _reader;
         private volatile bool _closing;
 
@@ -86,16 +91,54 @@ namespace StreamDeckAudio
             new Dictionary<string, Dictionary<string, object>>(StringComparer.Ordinal);
         private readonly Dictionary<string, Action<Dictionary<string, object>>> _handlers =
             new Dictionary<string, Action<Dictionary<string, object>>>(StringComparer.Ordinal);
+
+        // Nonces que todavia le importan a alguien. Sin este set, una respuesta
+        // que llega despues de que WaitFor ya tiro por timeout se queda para
+        // siempre en _replies: nadie la va a pedir de nuevo ni a sacarla.
+        private readonly HashSet<string> _pending = new HashSet<string>(StringComparer.Ordinal);
+
         private readonly object _gate = new object();
+
+        // Candado aparte para escribir el pipe. El reader thread manda PONG desde
+        // ReadLoop mientras un caller manda Request/Subscribe/Close al mismo tiempo;
+        // sin serializar los dos WriteFrame (header y payload van en escrituras
+        // separadas) se intercalan y el stream queda corrupto para siempre. No
+        // puede ser _gate: ese lock lo tiene tomado Dispatch mientras espera
+        // Monitor.Wait, y una escritura bloqueante de pipe ahi adentro frena todo
+        // el reader.
+        private readonly object _writeGate = new object();
+
+        // Handshake: hasta que llegue READY (o Discord mande CLOSE, o se agote el
+        // timeout) Connect no puede devolver true. Se resuelven bajo _gate igual
+        // que las respuestas por nonce, pero READY no trae nonce.
+        private volatile bool _handshakeReady;
+        private volatile bool _handshakeClosed;
 
         public event Action Disconnected;
 
-        /// <summary>Abre el primer pipe que responda y completa el handshake.</summary>
+        /// <summary>
+        /// Abre el primer pipe que responda y completa el handshake.
+        /// Bloquea hasta ~2 s cuando Discord no esta corriendo (10 pipes x 200 ms
+        /// de connect timeout cada uno) mas hasta 5 s esperando READY: nunca
+        /// llamar desde el thread de mensajes del host, tiene que ir en su propio
+        /// thread como hace DiscordProbe.
+        /// </summary>
         public bool Connect(string clientId)
         {
+            // Sin este reset, una segunda llamada a Connect despues de Close()
+            // arranca un reader cuyo "while (!_closing ...)" ya es false: el
+            // objeto queda "conectado" pero sordo.
+            _closing = false;
+
             for (int i = 0; i < 10; i++)
             {
-                var pipe = new NamedPipeClientStream(".", "discord-ipc-" + i, PipeDirection.InOut);
+                // Asynchronous (overlapped) es obligatorio acá: con el modo
+                // sincrónico por defecto, Windows serializa el handle entero, y un
+                // Write desde este thread se cuelga para siempre mientras el reader
+                // thread tiene un Read pendiente sobre el mismo pipe (confirmado
+                // colgando el Close() de este mismo task antes de este fix).
+                var pipe = new NamedPipeClientStream(".", "discord-ipc-" + i, PipeDirection.InOut,
+                                                      PipeOptions.Asynchronous);
                 try
                 {
                     pipe.Connect(200);
@@ -107,15 +150,48 @@ namespace StreamDeckAudio
                 }
 
                 _pipe = pipe;
-                WriteFrame(_pipe, OpHandshake,
-                           "{\"v\":1,\"client_id\":\"" + Json.Escape(clientId) + "\"}");
+                _handshakeReady = false;
+                _handshakeClosed = false;
+
+                lock (_writeGate)
+                {
+                    WriteFrame(_pipe, OpHandshake,
+                               "{\"v\":1,\"client_id\":\"" + Json.Escape(clientId) + "\"}");
+                }
 
                 _reader = new Thread(ReadLoop) { IsBackground = true, Name = "discord-rpc" };
                 _reader.Start();
+
+                if (!WaitForHandshake(5000))
+                {
+                    // Un pipe que acepta la conexion TCP-like pero rechaza el
+                    // client_id (CLOSE) o no contesta nada (timeout) no sirve:
+                    // "conectado" tiene que significar que Discord confirmo, no
+                    // solo que el named pipe existia.
+                    Log.Write("Discord RPC: discord-ipc-" + i + " no confirmo el handshake (READY)");
+                    Close();
+                    return false;
+                }
+
                 Log.Write("Discord RPC: conectado a discord-ipc-" + i);
                 return true;
             }
             return false;
+        }
+
+        private bool WaitForHandshake(int timeoutMs)
+        {
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            lock (_gate)
+            {
+                while (!_handshakeReady && !_handshakeClosed)
+                {
+                    var left = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                    if (left <= 0) return false;
+                    Monitor.Wait(_gate, left);
+                }
+            }
+            return _handshakeReady;
         }
 
         private void ReadLoop()
@@ -126,7 +202,27 @@ namespace StreamDeckAudio
                 string json;
                 while (!_closing && ReadFrame(_pipe, out opcode, out json))
                 {
-                    if (opcode == OpPing) { WriteFrame(_pipe, OpPong, json); continue; }
+                    if (opcode == OpPing)
+                    {
+                        lock (_writeGate) { WriteFrame(_pipe, OpPong, json); }
+                        continue;
+                    }
+
+                    if (opcode == OpClose)
+                    {
+                        // El payload trae el motivo (client id invalido, version
+                        // vieja, etc.) y es el unico diagnostico que Discord da
+                        // antes de tirar la conexion: vale la pena verlo en el log
+                        // cuando una tecla deja de responder.
+                        Log.Write("Discord RPC: CLOSE recibido: " + json);
+                        lock (_gate)
+                        {
+                            _handshakeClosed = true;
+                            Monitor.PulseAll(_gate);
+                        }
+                        continue;
+                    }
+
                     if (opcode != OpFrame) continue;
 
                     var message = Serializer.Deserialize<Dictionary<string, object>>(json);
@@ -138,12 +234,25 @@ namespace StreamDeckAudio
                 if (!_closing) Log.Write("Discord RPC: lectura cortada: " + ex.Message);
             }
 
-            if (_closing) return;
+            // Re-chequear bajo _gate: si Close() corrio justo entre que el while
+            // de arriba salio y esta linea, un chequeo sin lock puede leer
+            // _closing == false y disparar Disconnected por una desconexion que
+            // el usuario pidio el mismo, haciendo que Task 6 reconecte a algo que
+            // se acaba de cerrar a proposito.
+            lock (_gate)
+            {
+                if (_closing) return;
+            }
             Action handler = Disconnected;
             if (handler != null) handler();
         }
 
-        // Una respuesta trae el nonce del pedido; un evento suscrito no trae ninguno.
+        // Los handlers de Subscribe corren en este mismo thread, el del reader.
+        // Eso preserva el orden de los eventos y alcanza para lo que hace Task 6
+        // (asignar campos), pero significa que un handler que llama Request se
+        // clava esperando su propia respuesta hasta el timeout, y mientras tanto
+        // ninguna otra respuesta pendiente se despacha. Los handlers no pueden
+        // mandar comandos ni bloquear.
         private void Dispatch(Dictionary<string, object> message)
         {
             string nonce = Json.Str(message, "nonce");
@@ -151,14 +260,30 @@ namespace StreamDeckAudio
             {
                 lock (_gate)
                 {
-                    _replies[nonce] = message;
-                    Monitor.PulseAll(_gate);
+                    // Si WaitFor ya se rindio por timeout, el nonce salio de
+                    // _pending: una respuesta tardia se descarta en vez de
+                    // quedarse en _replies para siempre.
+                    if (_pending.Contains(nonce))
+                    {
+                        _replies[nonce] = message;
+                        Monitor.PulseAll(_gate);
+                    }
                 }
                 return;
             }
 
             string evt = Json.Str(message, "evt");
             if (string.IsNullOrEmpty(evt)) return;
+
+            if (evt == "READY")
+            {
+                lock (_gate)
+                {
+                    _handshakeReady = true;
+                    Monitor.PulseAll(_gate);
+                }
+                return;
+            }
 
             Action<Dictionary<string, object>> subscriber;
             lock (_gate)
@@ -170,17 +295,55 @@ namespace StreamDeckAudio
 
         public Dictionary<string, object> Request(string cmd, Dictionary<string, object> args, int timeoutMs)
         {
+            if (_pipe == null) throw new DiscordRpcException(0, "no conectado a Discord");
+
             string nonce = Guid.NewGuid().ToString("N");
+            lock (_gate) { _pending.Add(nonce); }
+
             var frame = new Dictionary<string, object>
             {
                 { "cmd", cmd },
                 { "args", args ?? new Dictionary<string, object>() },
                 { "nonce", nonce }
             };
-            WriteFrame(_pipe, OpFrame, Serializer.Serialize(frame));
+            lock (_writeGate) { WriteFrame(_pipe, OpFrame, Serializer.Serialize(frame)); }
 
             Dictionary<string, object> reply = WaitFor(nonce, timeoutMs);
-            if (reply == null) throw new DiscordRpcException(0, cmd + ": sin respuesta en " + timeoutMs + " ms");
+            return UnwrapReply(cmd, reply, timeoutMs);
+        }
+
+        private Dictionary<string, object> WaitFor(string nonce, int timeoutMs)
+        {
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            try
+            {
+                lock (_gate)
+                {
+                    while (true)
+                    {
+                        Dictionary<string, object> reply;
+                        if (_replies.TryGetValue(nonce, out reply)) { _replies.Remove(nonce); return reply; }
+
+                        var left = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                        if (left <= 0) return null;
+                        Monitor.Wait(_gate, left);
+                    }
+                }
+            }
+            finally
+            {
+                // Llegue o no la respuesta a tiempo, el nonce deja de estar
+                // pendiente: si Discord contesta tarde, Dispatch la descarta en
+                // vez de dejarla acumulada en _replies para siempre.
+                lock (_gate) { _pending.Remove(nonce); }
+            }
+        }
+
+        // Comun a Request y Subscribe: ambos mandan un frame con nonce y esperan
+        // exactamente la misma forma de respuesta (ok, ERROR, o nada).
+        private static Dictionary<string, object> UnwrapReply(string context, Dictionary<string, object> reply, int timeoutMs)
+        {
+            if (reply == null) throw new DiscordRpcException(0, context + ": sin respuesta en " + timeoutMs + " ms");
 
             if (Json.Str(reply, "evt") == "ERROR")
             {
@@ -190,40 +353,53 @@ namespace StreamDeckAudio
             return Json.Dict(reply, "data");
         }
 
-        private Dictionary<string, object> WaitFor(string nonce, int timeoutMs)
-        {
-            DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-            lock (_gate)
-            {
-                while (true)
-                {
-                    Dictionary<string, object> reply;
-                    if (_replies.TryGetValue(nonce, out reply)) { _replies.Remove(nonce); return reply; }
-
-                    var left = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
-                    if (left <= 0) return null;
-                    Monitor.Wait(_gate, left);
-                }
-            }
-        }
-
         public void Subscribe(string evt, Action<Dictionary<string, object>> handler)
         {
-            lock (_gate) { _handlers[evt] = handler; }
+            if (_pipe == null) throw new DiscordRpcException(0, "no conectado a Discord");
 
             string nonce = Guid.NewGuid().ToString("N");
+            lock (_gate) { _pending.Add(nonce); }
+
             var frame = new Dictionary<string, object>
             {
                 { "cmd", "SUBSCRIBE" }, { "evt", evt },
                 { "args", new Dictionary<string, object>() }, { "nonce", nonce }
             };
-            WriteFrame(_pipe, OpFrame, Serializer.Serialize(frame));
-            WaitFor(nonce, 5000);
+            lock (_writeGate) { WriteFrame(_pipe, OpFrame, Serializer.Serialize(frame)); }
+
+            Dictionary<string, object> reply = WaitFor(nonce, 5000);
+            // Un SUBSCRIBE puede volver ERROR (evento desconocido, falta scope
+            // OAuth) igual que cualquier Request; sin este chequeo, un rechazo
+            // reporta exito y despues nunca llega nada.
+            UnwrapReply("SUBSCRIBE " + evt, reply, 5000);
+
+            // El handler se registra recien ahora que Discord confirmo: si
+            // agregarlo antes y la suscripcion es rechazada, queda una entrada
+            // fantasma que nunca va a disparar.
+            lock (_gate) { _handlers[evt] = handler; }
         }
 
         public void Close()
         {
-            _closing = true;
+            lock (_gate) { _closing = true; }
+
+            try
+            {
+                if (_pipe != null)
+                {
+                    // Un ReadFile bloqueado en .NET Framework retiene el
+                    // SafePipeHandle: Dispose no lo suelta hasta que ese read
+                    // vuelve. Mandarle CLOSE a Discord hace que el cierre su
+                    // punta, lo que desbloquea nuestro read; sin esto el reader
+                    // thread queda parado para siempre y, en el loop de reconexion
+                    // de Task 6, se filtra un thread y un handle de pipe por ciclo.
+                    // (Este write solo no se cuelga porque el pipe es asíncrono;
+                    // ver el comentario en Connect.)
+                    lock (_writeGate) { WriteFrame(_pipe, OpClose, "{}"); }
+                }
+            }
+            catch (Exception) { /* el pipe ya puede estar muerto del otro lado */ }
+
             try { if (_pipe != null) _pipe.Dispose(); }
             catch (Exception) { }
             _pipe = null;
