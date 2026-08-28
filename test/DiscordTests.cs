@@ -86,6 +86,63 @@ namespace StreamDeckAudio
             }
         }
 
+        private static void TokenRoundTrip()
+        {
+            Console.WriteLine("store:");
+            var token = new DiscordToken
+            {
+                Access = "at-123",
+                Refresh = "rt-456",
+                Scope = "identify rpc",
+                ExpiresUtc = new DateTime(2030, 1, 2, 3, 4, 5, DateTimeKind.Utc)
+            };
+            DiscordAuth.Save(token);
+
+            DiscordToken loaded = DiscordAuth.Load();
+            Check.Equal("access", "at-123", loaded.Access);
+            Check.Equal("refresh", "rt-456", loaded.Refresh);
+            Check.Equal("scope", "identify rpc", loaded.Scope);
+            Check.Equal("expiracion", token.ExpiresUtc, loaded.ExpiresUtc);
+        }
+
+        // 80 % de 7 dias son 5,6 dias. A los 6 hay que renovar; a los 3 todavia no.
+        private static void RenewalWindow()
+        {
+            var fresh = new DiscordToken { Access = "a", ExpiresUtc = DateTime.UtcNow.AddDays(4) };
+            Check.Equal("token de 4 dias no renueva", false, fresh.NeedsRenewal);
+
+            var stale = new DiscordToken { Access = "a", ExpiresUtc = DateTime.UtcNow.AddDays(1) };
+            Check.Equal("token de 1 dia renueva", true, stale.NeedsRenewal);
+
+            var dead = new DiscordToken { Access = "a", ExpiresUtc = DateTime.UtcNow.AddDays(-1) };
+            Check.Equal("token vencido renueva", true, dead.NeedsRenewal);
+        }
+
+        // Regla 1. Este es el bug de HotSpot, escrito como test.
+        private static void FailedRenewalKeepsOldToken()
+        {
+            var original = new DiscordToken
+            {
+                Access = "viejo", Refresh = "rt-viejo",
+                ExpiresUtc = DateTime.UtcNow.AddDays(-1)      // vencido a proposito
+            };
+            DiscordAuth.Save(original);
+
+            // Refresh que falla: sin red, sin credenciales de app cargadas.
+            DiscordAuth.SetClientCredentials(null, null);
+            string token = DiscordAuth.AccessToken();
+
+            Check.Equal("un refresh fallido devuelve null", null, token);
+            Check.True("el token viejo sigue en disco", DiscordAuth.Load() != null);
+            Check.Equal("y es el mismo", "viejo", DiscordAuth.Load().Access);
+        }
+
+        private static void CorruptStoreIsNullNotCrash()
+        {
+            System.IO.File.WriteAllText(DiscordAuth.StorePath, "esto no es DPAPI");
+            Check.Equal("store corrupto devuelve null", null, DiscordAuth.Load());
+        }
+
         public static int Main()
         {
             FrameRoundTrip();
@@ -93,6 +150,10 @@ namespace StreamDeckAudio
             UnicodeSurvives();
             TruncatedStreamIsFalseNotHang();
             InvalidLengthIsFalseWithZeroOpcode();
+            TokenRoundTrip();
+            RenewalWindow();
+            FailedRenewalKeepsOldToken();
+            CorruptStoreIsNullNotCrash();   // último: deja el store ilegible a proposito
             return Check.Report();
         }
     }

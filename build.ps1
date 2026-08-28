@@ -71,8 +71,8 @@ Invoke-Csc -Out (Join-Path $bin 'FakeApp.exe') `
 # Tests offline. No necesitan Discord ni el deck.
 Invoke-Csc -Out (Join-Path $bin 'DiscordTests.exe') `
            -Sources @('src\AudioCore.cs', 'src\Json.cs', 'src\DiscordRpc.cs',
-                      'test\Assert.cs', 'test\DiscordTests.cs') `
-           -Refs @('System.Web.Extensions.dll')
+                      'src\DiscordAuth.cs', 'test\Assert.cs', 'test\DiscordTests.cs') `
+           -Refs @('System.Web.Extensions.dll', 'System.Security.dll')
 
 # Companion de consola para el backend de Discord.
 Invoke-Csc -Out (Join-Path $bin 'DiscordProbe.exe') `
