@@ -50,12 +50,19 @@ namespace StreamDeckAudio
 
         private static void Attach()
         {
+            // Declarado ANTES del try (no adentro, como en las tres rondas de
+            // fix anteriores de este mismo codebase): si algo entre Connect()
+            // y Ready tira -- Subscribe rechazado, timeout -- el catch de
+            // abajo necesita poder cerrar esta conexion. Una var declarada
+            // dentro del try no es visible en su catch; dejarla afuera es lo
+            // unico que permite cerrar sin duplicar el try por cada paso.
+            DiscordRpc rpc = null;
             try
             {
                 string token = DiscordAuth.AccessToken();
                 if (string.IsNullOrEmpty(token)) { Fail(DiscordLink.NoAuth); return; }
 
-                var rpc = new DiscordRpc();
+                rpc = new DiscordRpc();
                 if (!rpc.Connect(DiscordAuth.ClientId)) { Fail(DiscordLink.NoDiscord); return; }
 
                 try
@@ -76,7 +83,8 @@ namespace StreamDeckAudio
                 // VOICE_SETTINGS_UPDATE es un evento documentado y es lo unico
                 // que la tecla de deafen necesita: sin el no hay forma de saber
                 // el estado real de mute, asi que un rechazo aca SI aborta
-                // Attach (cae al catch de afuera, State pasa a NoDiscord).
+                // Attach (cae al catch de afuera, State pasa a NoDiscord --
+                // y ese catch ahora cierra rpc, ver el comentario de arriba).
                 rpc.Subscribe("VOICE_SETTINGS_UPDATE", OnVoiceSettings);
 
                 // SCREENSHARE_STATE_UPDATE no tiene contrato documentado en la
@@ -109,6 +117,14 @@ namespace StreamDeckAudio
             catch (Exception ex)
             {
                 Log.Write("Discord: conexion fallo: " + ex.Message);
+
+                // Tercera vez que aparece esta clase de bug en este codebase
+                // (y la que dejaba al plugin que reemplazamos perdiendo un
+                // thread por ciclo de reconexion): un rpc ya conectado que
+                // sale de Attach sin pasar por _rpc tiene que cerrarse aca,
+                // o el reader thread y el handle del pipe quedan huerfanos
+                // para siempre -- nadie mas tiene la referencia para cerrarlos.
+                if (rpc != null) rpc.Close();
                 Fail(DiscordLink.NoDiscord);
             }
         }
@@ -149,6 +165,19 @@ namespace StreamDeckAudio
 
         // Misma regla que OnVoiceSettings: solo asignar y avisar, nunca llamar
         // ni bloquear. Corre en el mismo thread lector.
+        //
+        // "active" NO esta confirmado contra un SCREENSHARE_STATE_UPDATE real:
+        // es un nombre de campo tomado de un bundle de un plugin de terceros,
+        // no de documentacion de Discord (el evento en si no tiene contrato
+        // documentado). Task 6 lo intento verificar dos formas: (1) watch
+        // corriendo con Discord abierto pero sin llamada de voz activa, y (2)
+        // un TOGGLE_SCREENSHARE disparado por RPC fuera de una llamada -- ese
+        // comando volvio sin error pero con data=null y sin disparar el
+        // evento, porque Discord no tiene nada que compartir sin estar en un
+        // canal de voz. Ninguno de los dos caminos hizo aparecer el evento de
+        // verdad, asi que "active" sigue siendo una suposicion sin confirmar.
+        // Verificar esto requiere una llamada de voz real con pantalla
+        // compartida; hasta entonces no tratar este nombre como confirmado.
         private static void OnScreenShare(Dictionary<string, object> data)
         {
             if (data == null) return;
