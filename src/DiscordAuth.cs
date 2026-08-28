@@ -168,14 +168,33 @@ namespace StreamDeckAudio
             if (!token.NeedsRenewal) return token.Access;
 
             DiscordToken renewed = TryRefresh(token);
-            if (renewed == null)
+
+            // Ninguna credencial sin refresh token puede llegar a Save(): guardar
+            // una asi es indistinguible de perder la capacidad de renovar para
+            // siempre, que es el bug de HotSpot. TryRefresh ya rellena el refresh
+            // token faltante con el viejo (RFC 6749 §6), asi que en el camino
+            // normal CanPersist siempre da true; esta linea es la ultima barrera
+            // por si ese relleno alguna vez no corre.
+            if (!CanPersist(renewed))
             {
-                Log.Write("Discord: refresh fallido, se conserva el token anterior");
+                Log.Write(renewed == null
+                    ? "Discord: refresh fallido, se conserva el token anterior"
+                    : "Discord: renovacion sin refresh_token, se descarta como si hubiera fallado para no perder la capacidad de renovar");
                 return token.ExpiresUtc > DateTime.UtcNow ? token.Access : null;
             }
 
             Save(renewed);
             return renewed.Access;
+        }
+
+        /// <summary>
+        /// Visible para tests: la regla que decide si una renovacion puede
+        /// guardarse. Separada de AccessToken para poder probar la decision
+        /// sin red.
+        /// </summary>
+        internal static bool CanPersist(DiscordToken renewed)
+        {
+            return renewed != null && !string.IsNullOrEmpty(renewed.Refresh);
         }
 
         public static DiscordToken Exchange(string code, string redirectUri)
@@ -191,14 +210,34 @@ namespace StreamDeckAudio
             if (token == null || string.IsNullOrEmpty(token.Refresh)) return null;
             try
             {
-                return PostToken("grant_type=refresh_token&refresh_token=" +
+                DiscordToken renewed = PostToken("grant_type=refresh_token&refresh_token=" +
                                  Uri.EscapeDataString(token.Refresh));
+                return BackfillRefresh(token, renewed);
             }
             catch (Exception ex)
             {
                 Log.Write("Discord: refresh fallo: " + ex.Message);
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Visible para tests: RFC 6749 §6 permite que el authorization server
+        /// omita refresh_token en la respuesta de un refresh -- la omision
+        /// significa "segui usando el que tenias", no "ya no tenes ninguno". Si
+        /// tomamos ese null tal cual, la proxima renovacion entra a TryRefresh,
+        /// ve token.Refresh vacio en su primera linea y se rinde sin ni siquiera
+        /// intentar la llamada: muerte silenciosa y permanente, el mismo bug que
+        /// este archivo existe para eliminar. Discord hoy siempre manda uno,
+        /// pero construir sobre eso es el supuesto que se cae en silencio el
+        /// dia que cambian -- por eso el relleno queda aca aunque hoy parezca
+        /// no hacer nada.
+        /// </summary>
+        internal static DiscordToken BackfillRefresh(DiscordToken original, DiscordToken renewed)
+        {
+            if (renewed != null && string.IsNullOrEmpty(renewed.Refresh))
+                renewed.Refresh = original.Refresh;
+            return renewed;
         }
 
         private static DiscordToken PostToken(string grant)
@@ -222,7 +261,37 @@ namespace StreamDeckAudio
             request.Timeout = 15000;
             using (Stream stream = request.GetRequestStream()) stream.Write(payload, 0, payload.Length);
 
-            using (var response = (HttpWebResponse)request.GetResponse())
+            HttpWebResponse response;
+            try
+            {
+                response = (HttpWebResponse)request.GetResponse();
+            }
+            catch (WebException ex)
+            {
+                // GetResponse() tira WebException para 4xx/5xx antes de que
+                // podamos entrar al using de abajo, y ex.Message solo trae algo
+                // generico como "(400) Bad Request" -- no dice si Discord
+                // rechazo por grant revocado, client secret invalido o rate
+                // limit. Esa razon vive en el body de la respuesta de ERROR
+                // (ex.Response), asi que lo leemos aca y lo sumamos al mensaje
+                // que se loguea mas arriba en TryRefresh. Ojo: esto es
+                // unicamente el body de RESPUESTA. El body de REQUEST (arriba,
+                // la variable `body`) tiene el client secret y nunca puede
+                // terminar en un log.
+                string detail = null;
+                if (ex.Response != null)
+                {
+                    using (WebResponse errorResponse = ex.Response)
+                    using (var errorReader = new StreamReader(errorResponse.GetResponseStream(), Encoding.UTF8))
+                    {
+                        detail = errorReader.ReadToEnd();
+                    }
+                }
+                throw new Exception("Discord token endpoint fallo: " + ex.Message +
+                                    (string.IsNullOrEmpty(detail) ? "" : " -- " + detail), ex);
+            }
+
+            using (response)
             using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
             {
                 var body_ = Serializer.Deserialize<Dictionary<string, object>>(reader.ReadToEnd());

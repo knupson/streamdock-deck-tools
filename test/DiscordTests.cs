@@ -151,6 +151,51 @@ namespace StreamDeckAudio
             Check.Equal("y es el mismo", "viejo", DiscordAuth.Load().Access);
         }
 
+        // RFC 6749 §6: omitir refresh_token en la respuesta de un refresh
+        // significa "seguis usando el que tenias". Sin este relleno, la
+        // proxima renovacion ve el refresh token vacio y se rinde para
+        // siempre -- el bug de HotSpot. No hay red involucrada: BackfillRefresh
+        // es una funcion pura sobre dos DiscordToken, asi que se puede probar
+        // la decision de merge directamente sin mockear HttpWebRequest.
+        private static void BackfillRefreshFillsOmittedToken()
+        {
+            var original = new DiscordToken { Access = "a", Refresh = "rt-original" };
+            var renewedSinRefresh = new DiscordToken { Access = "b", Refresh = null };
+
+            DiscordToken result = DiscordAuth.BackfillRefresh(original, renewedSinRefresh);
+
+            Check.Equal("refresh omitido se rellena con el viejo", "rt-original", result.Refresh);
+            Check.Equal("access nuevo se conserva", "b", result.Access);
+        }
+
+        private static void BackfillRefreshKeepsFreshToken()
+        {
+            var original = new DiscordToken { Access = "a", Refresh = "rt-original" };
+            var renewedConRefresh = new DiscordToken { Access = "b", Refresh = "rt-nuevo" };
+
+            DiscordToken result = DiscordAuth.BackfillRefresh(original, renewedConRefresh);
+
+            Check.Equal("refresh presente no se pisa", "rt-nuevo", result.Refresh);
+        }
+
+        private static void BackfillRefreshPassesThroughNull()
+        {
+            var original = new DiscordToken { Access = "a", Refresh = "rt-original" };
+
+            Check.Equal("renewal null sigue siendo null", null, DiscordAuth.BackfillRefresh(original, null));
+        }
+
+        // Ultima barrera de AccessToken: ninguna credencial sin refresh token
+        // puede persistirse, sin importar de donde haya salido.
+        private static void CanPersistRejectsMissingRefresh()
+        {
+            Check.True("null nunca se puede persistir", !DiscordAuth.CanPersist(null));
+            Check.True("refresh vacio no se puede persistir",
+                !DiscordAuth.CanPersist(new DiscordToken { Access = "a", Refresh = "" }));
+            Check.True("refresh presente si se puede persistir",
+                DiscordAuth.CanPersist(new DiscordToken { Access = "a", Refresh = "rt" }));
+        }
+
         private static void CorruptStoreIsNullNotCrash()
         {
             System.IO.File.WriteAllText(DiscordAuth.StorePath, "esto no es DPAPI");
@@ -168,6 +213,10 @@ namespace StreamDeckAudio
             SaveOverwritesExistingStore();
             RenewalWindow();
             FailedRenewalKeepsOldToken();
+            BackfillRefreshFillsOmittedToken();
+            BackfillRefreshKeepsFreshToken();
+            BackfillRefreshPassesThroughNull();
+            CanPersistRejectsMissingRefresh();
             CorruptStoreIsNullNotCrash();   // último: deja el store ilegible a proposito
             return Check.Report();
         }
