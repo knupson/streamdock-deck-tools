@@ -84,7 +84,10 @@ namespace StreamDeckAudio
         // la pone en null desde otro thread; sin esto no hay garantia de que el
         // reader vea el null (solo funciona por casualidad en x64).
         private volatile NamedPipeClientStream _pipe;
-        private Thread _reader;
+
+        // Volatile por la misma razon que _pipe: Close() la lee (para el Join
+        // acotado) desde un thread que no es el que la asigno.
+        private volatile Thread _reader;
         private volatile bool _closing;
 
         private readonly Dictionary<string, Dictionary<string, object>> _replies =
@@ -119,12 +122,22 @@ namespace StreamDeckAudio
         /// <summary>
         /// Abre el primer pipe que responda y completa el handshake.
         /// Bloquea hasta ~2 s cuando Discord no esta corriendo (10 pipes x 200 ms
-        /// de connect timeout cada uno) mas hasta 5 s esperando READY: nunca
-        /// llamar desde el thread de mensajes del host, tiene que ir en su propio
-        /// thread como hace DiscordProbe.
+        /// de connect timeout cada uno), mas hasta 5 s esperando READY, mas hasta
+        /// 2 s adicionales de Close() si el handshake termina rechazado o en
+        /// timeout (Close() ahora hace join del reader viejo): ~9 s en el peor
+        /// caso. Nunca llamar desde el thread de mensajes del host, tiene que ir
+        /// en su propio thread como hace DiscordProbe.
         /// </summary>
         public bool Connect(string clientId)
         {
+            // Guard defensivo, no un patron de uso soportado: si ya habia una
+            // conexion viva (dos Connect() seguidos sin Close() en el medio),
+            // cerrarla antes de abrir la nueva. Sin esto, el reader y el pipe
+            // viejos quedan huerfanos para siempre -- nadie los va a Join ni a
+            // Dispose -- exactamente la misma familia de leak que Close() ya
+            // tiene que evitar en su propio ciclo.
+            if (_pipe != null) Close();
+
             // Sin este reset, una segunda llamada a Connect despues de Close()
             // arranca un reader cuyo "while (!_closing ...)" ya es false: el
             // objeto queda "conectado" pero sordo.
@@ -342,12 +355,16 @@ namespace StreamDeckAudio
 
         // _pipe puede pasar a null (Close corriendo en otro thread) entre el
         // chequeo de arriba y esta escritura; trabajar sobre el pipe local que ya
-        // capturamos evita la NullReferenceException, pero el pipe en si puede
-        // seguir siendo el mismo objeto ya disposeado. .NET Framework tira
-        // ObjectDisposedException para eso casi siempre, pero PipeStream tiene
-        // campos internos que Dispose deja en null y a veces sale
-        // NullReferenceException en su lugar: Task 5 y 6 solo saben atrapar
-        // DiscordRpcException, asi que traducimos las dos.
+        // capturamos evita la NullReferenceException por esa carrera puntual,
+        // pero el pipe en si puede seguir siendo el mismo objeto ya disposeado, o
+        // seguir vivo del lado nuestro pero muerto del otro lado (Discord cerro,
+        // crasheo). .NET Framework tira ObjectDisposedException para lo primero
+        // casi siempre (a veces NullReferenceException: PipeStream tiene campos
+        // internos que Dispose deja en null antes de que el objeto se considere
+        // completamente disposed para todos los chequeos), e IOException
+        // ("Pipe is broken", "El proceso no tiene acceso...") para lo segundo --
+        // el caso mas comun de los tres en la practica. Task 5 y 6 solo saben
+        // atrapar DiscordRpcException, asi que traducimos las tres.
         private void WriteFrameOrThrow(string context, NamedPipeClientStream pipe, Dictionary<string, object> frame)
         {
             try
@@ -359,6 +376,10 @@ namespace StreamDeckAudio
                 throw new DiscordRpcException(0, context + ": el pipe se cerro mientras se escribia (" + ex.Message + ")");
             }
             catch (NullReferenceException ex)
+            {
+                throw new DiscordRpcException(0, context + ": el pipe se cerro mientras se escribia (" + ex.Message + ")");
+            }
+            catch (IOException ex)
             {
                 throw new DiscordRpcException(0, context + ": el pipe se cerro mientras se escribia (" + ex.Message + ")");
             }
@@ -401,11 +422,22 @@ namespace StreamDeckAudio
             if (pipe == null) throw new DiscordRpcException(0, "no conectado a Discord");
 
             // Registrado ANTES de mandar el SUBSCRIBE: si el evento llegara entre
-            // el ack de Discord y el registro del handler, se perderia. Si la
-            // suscripcion termina rechazada, el catch de abajo lo saca de nuevo
-            // -- no revive la entrada fantasma que finding 4 elimino, porque
-            // sobrevive solo cuando UnwrapReply no tira.
-            lock (_gate) { _handlers[evt] = handler; }
+            // el ack de Discord y el registro del handler, se perderia. Save-and-
+            // restore, no un Remove incondicional: si ya habia un handler previo
+            // andando para este mismo evt (re-subscribe) y el intento nuevo es
+            // rechazado o vence, el catch de abajo tiene que devolver el handler
+            // VIEJO, no borrar la entrada entera -- la suscripcion vieja del lado
+            // de Discord sigue viva, y un Remove sin condicion tira ese handler
+            // que seguia funcionando y deja los eventos cayendo al piso en
+            // silencio. Cuando no habia nada antes, restaurar "nada" es el mismo
+            // comportamiento que el Remove que finding 4 (ronda 1) pedia.
+            Action<Dictionary<string, object>> previous;
+            bool hadPrevious;
+            lock (_gate)
+            {
+                hadPrevious = _handlers.TryGetValue(evt, out previous);
+                _handlers[evt] = handler;
+            }
 
             string nonce = Guid.NewGuid().ToString("N");
             lock (_gate) { _pending.Add(nonce); }
@@ -426,7 +458,11 @@ namespace StreamDeckAudio
             }
             catch
             {
-                lock (_gate) { _handlers.Remove(evt); }
+                lock (_gate)
+                {
+                    if (hadPrevious) _handlers[evt] = previous;
+                    else _handlers.Remove(evt);
+                }
                 throw;
             }
             finally

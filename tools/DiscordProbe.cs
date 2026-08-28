@@ -30,16 +30,28 @@ namespace StreamDeckAudio
             return 0;
         }
 
-        // Ejercita el ciclo Close() -> Connect() sobre la MISMA instancia varias
-        // veces seguidas: es el camino que el fix de "reader thread resurrection"
-        // tiene que dejar sano (reader viejo capturando su propio pipe, Close()
-        // esperando a que termine antes de que Connect() pueda reasignar _pipe).
-        // Si el fix estuviera mal, esto se cuelga (dos readers peleando el mismo
-        // stream) o dispara un Disconnected espurio que un test unitario no
-        // puede ver porque hace falta un pipe real de Discord.
+        // Smoke test del ciclo Close() -> Connect() sobre la MISMA instancia, mas
+        // un observador de Disconnected. Que NO probar con esto: un loop idle de
+        // tres ciclos no genera nunca un frame en vuelo justo en el instante de
+        // Close(), asi que la rama de "dos readers pisandose el mismo stream" no
+        // se puede disparar aca con ningun numero de repeticiones -- eso hay que
+        // seguir confiando en la lectura del codigo (el reader captura su propio
+        // pipe por parametro, asi que un segundo reader nunca puede empezar a
+        // leer del pipe nuevo; ver el comentario en ReadLoop). Lo que este
+        // comando SI puede detectar, con el observer de abajo, es la otra rama: un
+        // Disconnected espurio disparado por el reader viejo justo despues de un
+        // reconnect exitoso. Sin el observer, la corrida "pasaba" tanto con el
+        // fix como sin el -- Close() ya cancelaba el read pendiente por el pipe
+        // asincronico y el reader viejo salia mucho antes de que Connect()
+        // terminara sus ~200ms+ de handshake, asi que el chequeo de _closing
+        // nunca alcanzaba a correr tarde. Este comando sigue sin ser prueba de la
+        // correccion del fix; es un smoke test mas un observer puntual.
         private static int Reconnect()
         {
             var rpc = new DiscordRpc();
+            bool sawSpuriousDisconnect = false;
+            rpc.Disconnected += () => { sawSpuriousDisconnect = true; };
+
             const int cycles = 3;
             for (int i = 0; i < cycles; i++)
             {
@@ -52,9 +64,15 @@ namespace StreamDeckAudio
 
                 rpc.Close();
                 Console.WriteLine("ciclo " + i + ": cerrado");
+
+                if (sawSpuriousDisconnect)
+                {
+                    Console.WriteLine("ciclo " + i + ": Disconnected se disparo durante un Close() pedido por el usuario -- espurio");
+                    return 1;
+                }
             }
 
-            Console.WriteLine(cycles + " ciclos connect/close ok sobre la misma instancia, sin colgarse");
+            Console.WriteLine(cycles + " ciclos connect/close ok sobre la misma instancia, sin Disconnected espurio, sin colgarse");
             return 0;
         }
 
