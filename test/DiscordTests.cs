@@ -216,22 +216,45 @@ namespace StreamDeckAudio
 
         public static int Main()
         {
-            FrameRoundTrip();
-            HeaderIsLittleEndian();
-            UnicodeSurvives();
-            TruncatedStreamIsFalseNotHang();
-            InvalidLengthIsFalseWithZeroOpcode();
-            TokenRoundTrip();
-            SaveOverwritesExistingStore();
-            RenewalWindow();
-            FailedRenewalKeepsOldToken();
-            BackfillRefreshFillsOmittedToken();
-            BackfillRefreshKeepsFreshToken();
-            BackfillRefreshPassesThroughNull();
-            CanPersistRejectsMissingRefresh();
-            HasScopeRejectsSubstringFalsePositive();
-            CorruptStoreIsNullNotCrash();   // último: deja el store ilegible a proposito
-            return Check.Report();
+            // Incidente real, fix round 1 de Task 5: sin este desvio, StorePath
+            // es el mismo archivo que usa la instalacion real, y
+            // CorruptStoreIsNullNotCrash (mas abajo) pisa ese archivo con basura
+            // a proposito. Correr este suite justo despues de un alta real dejo
+            // el store de produccion en "sin credenciales" -- una credencial
+            // viva, destruida por un test. DiscordAuth.TestStoreOverride redirige
+            // StorePath a un temp file solo mientras este proceso corre; el
+            // store real nunca se toca desde aca.
+            string tempStore = Path.Combine(Path.GetTempPath(),
+                "discordtests-store-" + Guid.NewGuid().ToString("N") + ".dat");
+            DiscordAuth.TestStoreOverride = tempStore;
+            try
+            {
+                FrameRoundTrip();
+                HeaderIsLittleEndian();
+                UnicodeSurvives();
+                TruncatedStreamIsFalseNotHang();
+                InvalidLengthIsFalseWithZeroOpcode();
+                TokenRoundTrip();
+                SaveOverwritesExistingStore();
+                RenewalWindow();
+                FailedRenewalKeepsOldToken();
+                BackfillRefreshFillsOmittedToken();
+                BackfillRefreshKeepsFreshToken();
+                BackfillRefreshPassesThroughNull();
+                CanPersistRejectsMissingRefresh();
+                HasScopeRejectsSubstringFalsePositive();
+                CorruptStoreIsNullNotCrash();   // último: deja el store ilegible a proposito
+                return Check.Report();
+            }
+            finally
+            {
+                // Desarmar el desvio y borrar el temp file: no dejar rastro, y
+                // no dejar TestStoreOverride puesto para ningun caller posterior
+                // dentro del mismo proceso.
+                DiscordAuth.TestStoreOverride = null;
+                try { if (File.Exists(tempStore)) File.Delete(tempStore); }
+                catch (Exception) { /* best-effort cleanup, no afecta el resultado */ }
+            }
         }
     }
 }

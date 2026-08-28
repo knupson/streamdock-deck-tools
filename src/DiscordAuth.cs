@@ -59,10 +59,27 @@ namespace StreamDeckAudio
         private static readonly JavaScriptSerializer Serializer = new JavaScriptSerializer();
         private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("DeckTools.Discord.v1");
 
+        // Test seam, no feature: sin esto StorePath es el mismo archivo real
+        // para tests y para la instalacion en uso, y Save/Load no distinguen
+        // quien llama. Paso de verdad en el fix round 1 de Task 5: correr
+        // DiscordTests.exe justo despues de un alta real dejo el store en
+        // "sin credenciales", porque CorruptStoreIsNullNotCrash pisa a proposito
+        // ese mismo archivo con basura para probar que Load() falla sin
+        // crashear. El store de produccion es una credencial VIVA, no un
+        // archivo de scratch -- este proyecto existe para que las credenciales
+        // no mueran solas, asi que un test suite que las mata de verdad no es
+        // aceptable. internal, como BackfillRefresh/CanPersist: solo el
+        // assembly de test lo toca. Nunca una env var ni configuracion: esto no
+        // es una opcion para el usuario, es un desvio que el test runner arma
+        // a proposito antes de tocar disco, y lo desarma al terminar.
+        internal static string TestStoreOverride;
+
         public static string StorePath
         {
             get
             {
+                if (!string.IsNullOrEmpty(TestStoreOverride)) return TestStoreOverride;
+
                 string dir = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "StreamDeckAudio");
