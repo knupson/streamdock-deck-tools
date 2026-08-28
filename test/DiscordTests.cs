@@ -196,6 +196,18 @@ namespace StreamDeckAudio
                 DiscordAuth.CanPersist(new DiscordToken { Access = "a", Refresh = "rt" }));
         }
 
+        // Fija el falso positivo que string.Contains dejaba pasar: "rpc" es
+        // substring de "rpc.voice.read", asi que un scope string que otorga el
+        // dotted scope pero retiene el "rpc" suelto tiene que reportar "rpc" como
+        // NO concedido, no como "ok" por casualidad de substring.
+        private static void HasScopeRejectsSubstringFalsePositive()
+        {
+            string granted = "identify rpc.voice.read rpc.voice.write";
+
+            Check.True("rpc.voice.read concedido de verdad", DiscordAuth.HasScope(granted, "rpc.voice.read"));
+            Check.True("rpc suelto NO concedido pese a ser substring", !DiscordAuth.HasScope(granted, "rpc"));
+        }
+
         private static void CorruptStoreIsNullNotCrash()
         {
             System.IO.File.WriteAllText(DiscordAuth.StorePath, "esto no es DPAPI");
@@ -217,6 +229,7 @@ namespace StreamDeckAudio
             BackfillRefreshKeepsFreshToken();
             BackfillRefreshPassesThroughNull();
             CanPersistRejectsMissingRefresh();
+            HasScopeRejectsSubstringFalsePositive();
             CorruptStoreIsNullNotCrash();   // último: deja el store ilegible a proposito
             return Check.Report();
         }

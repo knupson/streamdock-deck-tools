@@ -215,17 +215,37 @@ namespace StreamDeckAudio
         public static bool Enroll(string clientId, string clientSecret, out string error)
         {
             error = null;
+
+            // _clientId/_clientSecret son los mismos campos estaticos que PostToken
+            // usa para renovar la credencial YA guardada en disco. Si los pisamos
+            // aca y despues cualquier paso de abajo falla (secret mal tipeado,
+            // Discord no contesta, AUTHORIZE sin code, canje sin refresh_token), un
+            // reintento de alta que sale mal dejaria la app funcionando hoy sin
+            // poder renovar mas: el proximo refresh de la credencial vieja usaria el
+            // secret nuevo y roto. Por eso el par anterior se guarda aca y se
+            // restaura en cualquier salida que no sea el "ok" final -- `success`
+            // marca esa unica salida feliz, y el `finally` es el unico lugar que
+            // decide si restaura o no.
+            string previousClientId = _clientId;
+            string previousClientSecret = _clientSecret;
             SetClientCredentials(clientId, clientSecret);
 
+            bool success = false;
             var rpc = new DiscordRpc();
-            if (!rpc.Connect(clientId))
-            {
-                error = "Discord no esta corriendo";
-                return false;
-            }
-
             try
             {
+                // Connect() vive DENTRO del try/finally: si tira (el pipe se cae
+                // entre pipe.Connect() y la escritura del handshake, una ventana
+                // angosta pero real), rpc.Close() en el finally sigue corriendo y
+                // libera el reader thread y el handle. Dejar Connect() afuera del
+                // try es la misma clase de leak que ya se saco de DiscordRpc en dos
+                // rondas de fix anteriores; no tiene sentido reintroducirla aca.
+                if (!rpc.Connect(clientId))
+                {
+                    error = "Discord no esta corriendo";
+                    return false;
+                }
+
                 var args = new Dictionary<string, object>
                 {
                     { "client_id", clientId },
@@ -256,6 +276,7 @@ namespace StreamDeckAudio
 
                 Save(token);
                 Log.Write("Discord: alta ok, scopes concedidos: " + token.Scope);
+                success = true;
                 return true;
             }
             catch (DiscordRpcException ex)
@@ -271,7 +292,27 @@ namespace StreamDeckAudio
             finally
             {
                 rpc.Close();
+                if (!success) SetClientCredentials(previousClientId, previousClientSecret);
             }
+        }
+
+        /// <summary>
+        /// Membresia exacta de un token dentro de un scope string separado por
+        /// espacios. Nunca usar string.Contains para esto: "rpc" es substring de
+        /// "rpc.voice.read", "rpc.voice.write", "rpc.screenshare.read" y
+        /// "rpc.screenshare.write", asi que Contains reportaria "ok" para un "rpc"
+        /// suelto que Discord en realidad no otorgo, mientras seguia otorgando los
+        /// scopes con punto -- exactamente el otorgamiento parcial que este chequeo
+        /// existe para detectar.
+        /// </summary>
+        internal static bool HasScope(string scopeString, string wanted)
+        {
+            if (string.IsNullOrEmpty(scopeString)) return false;
+            foreach (string token in scopeString.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (token == wanted) return true;
+            }
+            return false;
         }
 
         private static DiscordToken TryRefresh(DiscordToken token)

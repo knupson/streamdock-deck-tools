@@ -100,7 +100,12 @@ namespace StreamDeckAudio
 
             foreach (string wanted in DiscordAuth.Scopes)
             {
-                bool granted = (token.Scope ?? string.Empty).Contains(wanted);
+                // DiscordAuth.HasScope, no string.Contains: "rpc" es substring de
+                // los cuatro scopes con punto, asi que Contains marcaria "ok" para
+                // un "rpc" suelto que Discord no otorgo mientras seguia otorgando
+                // los demas -- justo el otorgamiento parcial que este comando
+                // existe para detectar.
+                bool granted = DiscordAuth.HasScope(token.Scope, wanted);
                 Console.WriteLine("    " + (granted ? "ok  " : "NO  ") + wanted);
             }
             return 0;
