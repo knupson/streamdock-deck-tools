@@ -21,11 +21,18 @@ namespace StreamDeckAudio
         public string Scope;
         public DateTime ExpiresUtc;
 
-        // Poblados por Load() a partir del record en disco, SOLO como datos de
-        // retorno -- Load() en si no los aplica a los estaticos _clientId/
-        // _clientSecret (ver el comentario de Load() y el de AccessToken(),
-        // fix round final Important 1). Null en un record legado que se guardo
-        // antes de que Task 6 agregara estos campos al store.
+        // Doble rol, y en los dos casos el motivo es el mismo: describir la
+        // credencial en el propio dato, nunca depender de los estaticos
+        // _clientId/_clientSecret que otro thread puede mover. (1) Poblados
+        // por Load() a partir del record en disco, solo como datos de
+        // retorno -- Load() en si no los aplica a los estaticos (ver su
+        // comentario y el de AccessToken(), fix round final Important 1).
+        // Null en un record legado que se guardo antes de que Task 6 agregara
+        // estos campos al store. (2) Poblados por TryRefresh (copiados del
+        // token que se esta renovando) y por Enroll (copiados de sus
+        // parametros locales) ANTES de Save(), para que Save() nunca tenga
+        // que leer los estaticos para saber que credencial esta escribiendo
+        // (ver el comentario en Save() sobre la interleaving que esto cierra).
         public string ClientId;
         public string ClientSecret;
 
@@ -99,18 +106,44 @@ namespace StreamDeckAudio
         public static void Save(DiscordToken token)
         {
             if (token == null) return;
-            // clientId/clientSecret viajan junto al token para que Task 6 (la
-            // sesion compartida) arranque con credenciales propias sin depender
-            // de que el Property Inspector haya corrido en este proceso: son los
-            // mismos campos estaticos que ya usa PostToken para renovar.
+
+            // Preferir el par que trae EL TOKEN sobre los estaticos -- misma
+            // muerte permanente que Important 1, por una puerta mas angosta.
+            // Sin esto: el thread de Attach esta dentro de AccessToken con
+            // _clientId == A; el token necesita renovarse; TryRefresh tarda
+            // hasta ~15s en la llamada HTTP a Discord. Mientras tanto el
+            // usuario aprieta Autorizar con la app B: Enroll pisa _clientId a
+            // B y se queda bloqueado en AUTHORIZE (hasta 60s). El thread de
+            // Attach vuelve de TryRefresh y llega aca, a Save(renewed) --si
+            // leyera los estaticos ahora, escribiria el token RENOVADO DE A al
+            // lado de las credenciales DE B. Si esa reautorizacion despues
+            // falla (secret mal tipeado, redirect faltante -- los casos
+            // comunes), su `finally` restaura A en el proceso y el dano queda
+            // invisible: el store en disco ya quedo con el token de A junto al
+            // client id/secret de B. El proximo arranque del proceso encuentra
+            // los estaticos vacios, aplica B desde el store (unico par
+            // disponible), y todo PostToken devuelve invalid_client para
+            // siempre -- exactamente la muerte permanente que este archivo
+            // existe para prohibir, ahora por una via que no pasaba por
+            // Load(). El token en si mismo (via TryRefresh copiando
+            // ClientId/ClientSecret del que esta renovando, y Enroll
+            // poblandolos con sus parametros locales, nunca con los
+            // estaticos) es lo unico que describe con que credencial se
+            // autentico de verdad -- los estaticos son estado ambiente que
+            // OTRO thread puede mover mientras este todavia esta trabajando.
+            // El fallback a los estaticos solo cubre callers viejos/de test
+            // que construyen un DiscordToken sin poblar estos dos campos.
+            string clientId = !string.IsNullOrEmpty(token.ClientId) ? token.ClientId : _clientId;
+            string clientSecret = !string.IsNullOrEmpty(token.ClientSecret) ? token.ClientSecret : _clientSecret;
+
             var record = new Dictionary<string, object>
             {
                 { "access", token.Access },
                 { "refresh", token.Refresh },
                 { "scope", token.Scope },
                 { "expires", token.ExpiresUtc.ToString("o") },
-                { "clientId", _clientId },
-                { "clientSecret", _clientSecret }
+                { "clientId", clientId },
+                { "clientSecret", clientSecret }
             };
 
             byte[] plain = Encoding.UTF8.GetBytes(Serializer.Serialize(record));
@@ -372,6 +405,15 @@ namespace StreamDeckAudio
 
                 DiscordToken token = Exchange(code, RedirectUri);
 
+                // Poblado desde los PARAMETROS locales de este metodo, nunca
+                // desde los estaticos: mismo motivo que TryRefresh (ver el
+                // comentario en Save()) -- clientId/clientSecret son locales
+                // inmutables de esta llamada a Enroll, asi que describen la
+                // app que se esta dando de alta sin importar si algo mas
+                // llega a tocar _clientId/_clientSecret mientras tanto.
+                token.ClientId = clientId;
+                token.ClientSecret = clientSecret;
+
                 // Misma regla que CanPersist aplica en AccessToken(): una credencial
                 // sin refresh token no se puede renovar nunca, asi que guardarla es
                 // indistinguible de perder la capacidad de renovar desde el dia cero
@@ -435,7 +477,26 @@ namespace StreamDeckAudio
             {
                 DiscordToken renewed = PostToken("grant_type=refresh_token&refresh_token=" +
                                  Uri.EscapeDataString(token.Refresh));
-                return BackfillRefresh(token, renewed);
+                renewed = BackfillRefresh(token, renewed);
+
+                // Mismo motivo que BackfillRefresh, aplicado al par de
+                // credenciales en vez del refresh token: lo que Save() termina
+                // escribiendo tiene que describirse a si mismo, no depender de
+                // en que estaban los estaticos _clientId/_clientSecret en el
+                // instante en que Save() corre -- ese instante puede llegar
+                // hasta ~15s despues de que PostToken arranco, y en el medio
+                // un Enroll() concurrente puede haberlos movido a otra app (ver
+                // el comentario en Save()). `token` es el que AccessToken()
+                // acaba de leer del store para ESTA renovacion puntual, asi
+                // que su ClientId/ClientSecret son los correctos sin importar
+                // que hagan los estaticos despues.
+                if (renewed != null)
+                {
+                    renewed.ClientId = token.ClientId;
+                    renewed.ClientSecret = token.ClientSecret;
+                }
+
+                return renewed;
             }
             catch (Exception ex)
             {

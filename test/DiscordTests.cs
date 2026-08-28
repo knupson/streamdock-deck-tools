@@ -191,6 +191,39 @@ namespace StreamDeckAudio
             DiscordAuth.SetClientCredentials(null, null);
         }
 
+        // Fix final #2: la misma muerte permanente de Important 1, por una
+        // puerta mas angosta -- Save() todavia leia los estaticos en vez del
+        // par que trae el token. Escenario real: el thread de Attach esta dentro
+        // de AccessToken con _clientId == A, TryRefresh tarda hasta ~15s en la
+        // llamada HTTP; mientras tanto el usuario reautoriza con la app B,
+        // Enroll pisa _clientId a B y se queda bloqueado en AUTHORIZE; el
+        // thread de Attach vuelve y llega a Save(renewed) -- si leyera los
+        // estaticos ahi, escribiria el token de A al lado de las credenciales
+        // de B. Sin el fix, este test falla: el segundo Save() pisaria
+        // "A"/"secret-A" con lo que digan los estaticos en ese momento.
+        private static void SavePrefersTokensOwnCredentialsOverStatics()
+        {
+            var token = new DiscordToken
+            {
+                Access = "at", Refresh = "rt", ExpiresUtc = DateTime.UtcNow.AddDays(3),
+                ClientId = "A", ClientSecret = "secret-A"
+            };
+            DiscordAuth.Save(token);
+
+            // Simula el Enroll() concurrente de arriba pisando los estaticos
+            // con la app B, DESPUES de que el token de A ya se armo.
+            DiscordAuth.SetClientCredentials("B", "secret-B");
+            DiscordAuth.Save(token);
+
+            DiscordToken loaded = DiscordAuth.Load();
+            Check.Equal("Save() prefiere el clientId del token, no el estatico",
+                        "A", loaded.ClientId);
+            Check.Equal("y el clientSecret del token",
+                        "secret-A", loaded.ClientSecret);
+
+            DiscordAuth.SetClientCredentials(null, null);
+        }
+
         // Regla 1. Este es el bug de HotSpot, escrito como test.
         private static void FailedRenewalKeepsOldToken()
         {
@@ -298,6 +331,7 @@ namespace StreamDeckAudio
                 RenewalWindow();
                 LoadDoesNotTouchStatics();
                 AccessTokenAppliesStoredCredsOnlyWhenNothingInFlight();
+                SavePrefersTokensOwnCredentialsOverStatics();
                 FailedRenewalKeepsOldToken();
                 BackfillRefreshFillsOmittedToken();
                 BackfillRefreshKeepsFreshToken();
