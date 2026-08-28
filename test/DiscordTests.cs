@@ -106,8 +106,11 @@ namespace StreamDeckAudio
         }
 
         // Cubre la rama File.Replace de Save: la primera Save no encuentra
-        // destino y hace un Move directo; esta segunda si, y tiene que pisarlo
-        // sin dejar un hueco donde el store no exista ni quedarse con el viejo.
+        // destino y hace un Move directo; esta segunda si. Esto NO prueba que
+        // no haya hueco -- una ventana de crash no es testeable desde un test
+        // unitario. Lo que si prueba: que pisar un store existente da un
+        // resultado legible y correcto, y que los argumentos source/destino de
+        // File.Replace estan en el orden correcto.
         private static void SaveOverwritesExistingStore()
         {
             DiscordAuth.Save(new DiscordToken { Access = "primero", ExpiresUtc = DateTime.UtcNow.AddDays(3) });
