@@ -92,6 +92,11 @@ internal static class GenIcons
         Write(Path.Combine(dir, "speakers.png"), 144,
               delegate(Graphics g) { DrawSpeakers(g); DrawVolumeSigns(g); });
 
+        // The un-deafened state reuses headphones.png outright; this is only the
+        // struck-through pair for when Discord has you deafened.
+        Write(Path.Combine(dir, "headphones-deaf.png"), 144,
+              delegate(Graphics g) { DrawHeadphones(g); DrawSlash(g); });
+
         Write(Path.Combine(dir, "action.png"), 144, DrawDial);
         Write(Path.Combine(dir, "category.png"), 48, DrawDial);
 
@@ -103,6 +108,9 @@ internal static class GenIcons
         Write(Path.Combine(dir, "screens.png"), 144, DrawScreens);
         Write(Path.Combine(dir, "screens-off.png"), 144,
               delegate(Graphics g) { DrawScreens(g); DrawSlash(g); });
+        Write(Path.Combine(dir, "share.png"), 144, DrawShare);
+        Write(Path.Combine(dir, "share-off.png"), 144,
+              delegate(Graphics g) { DrawShare(g); DrawSlash(g); });
         Write(Path.Combine(dir, "gauge.png"), 144, DrawGauge);
         Write(Path.Combine(dir, "shortcut.png"), 144, DrawShortcut);
         Write(Path.Combine(dir, "wake.png"), 144, DrawWake);
@@ -1143,6 +1151,33 @@ internal static class GenIcons
                     g.DrawPath(cut, front);
                 g.DrawPath(pen, front);
             }
+        }
+    }
+
+    // A monitor with an upward arrow on its face: the same shorthand DrawShareScreen
+    // uses for the icon pack, redrawn at the value-glyph band and DrawScreens'
+    // stroke weight so it sits beside mixer.png and screens.png rather than beside
+    // the full-tile pack art it was adapted from.
+    private static void DrawShare(Graphics g)
+    {
+        using (Brush chrome = Chrome(ValueGlyphTop, ValueGlyphBottom))
+        using (var pen = new Pen(chrome, 6f) { LineJoin = LineJoin.Round })
+        {
+            using (GraphicsPath frame = Rounded(new RectangleF(38, ValueGlyphTop, 68, 34), 6f))
+                g.DrawPath(pen, frame);
+
+            using (GraphicsPath stand = Rounded(new RectangleF(62, ValueGlyphBottom - 6, 20, 6), 3f))
+                g.FillPath(chrome, stand);
+
+            // Arrow kept inside the frame rather than breaking out of it: at this
+            // size a tip poking past the bezel reads as a stray mark, not a glyph.
+            using (GraphicsPath shaft = Rounded(new RectangleF(66, 60, 12, 16), 5f))
+                g.FillPath(chrome, shaft);
+
+            g.FillPolygon(chrome, new[]
+            {
+                new PointF(72, 50), new PointF(86, 64), new PointF(58, 64)
+            });
         }
     }
 
