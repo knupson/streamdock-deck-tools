@@ -59,6 +59,20 @@ namespace StreamDeckAudio
         void GetCurFile([MarshalAs(UnmanagedType.LPWStr)] out string fileName);
     }
 
+    [ComImport, Guid("BCC18B79-BA16-442F-80C4-8A59C30C463B"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IShellItemImageFactory
+    {
+        [PreserveSig] int GetImage(ShellSize size, int flags, out IntPtr bitmap);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ShellSize
+    {
+        public int Width;
+        public int Height;
+    }
+
     #endregion
 
     public sealed class Shortcut
@@ -80,6 +94,25 @@ namespace StreamDeckAudio
 
         [DllImport("user32.dll")]
         private static extern bool DestroyIcon(IntPtr icon);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+        private static extern void SHCreateItemFromParsingName(string path, IntPtr bindContext,
+            [MarshalAs(UnmanagedType.LPStruct)] Guid riid,
+            [MarshalAs(UnmanagedType.Interface)] out IShellItemImageFactory item);
+
+        [DllImport("gdi32.dll")]
+        private static extern bool DeleteObject(IntPtr handle);
+
+        [DllImport("gdi32.dll")]
+        private static extern int GetObject(IntPtr handle, int size, out BitmapInfo info);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct BitmapInfo
+        {
+            public int Type, Width, Height, WidthBytes;
+            public short Planes, BitsPixel;
+            public IntPtr Bits;
+        }
 
         /// <summary>Files in the folder, sorted by name. Directories are skipped.</summary>
         public static List<Shortcut> List(string folder)
@@ -143,8 +176,14 @@ namespace StreamDeckAudio
         /// <summary>The item's own icon at the largest size available, or null.</summary>
         public static Bitmap Icon(string path)
         {
+            // Keyed by write time too: giving a shortcut a new icon rewrites the
+            // file, and the process lives far longer than any one icon choice.
+            string key;
+            try { key = path + "|" + File.GetLastWriteTimeUtc(path).Ticks; }
+            catch (Exception) { key = path; }
+
             Bitmap cached;
-            if (IconCache.TryGetValue(path, out cached)) return cached;
+            if (IconCache.TryGetValue(key, out cached)) return cached;
 
             Bitmap icon = null;
             try
@@ -158,7 +197,11 @@ namespace StreamDeckAudio
                 Log.Write("icon lookup failed for " + path + ": " + ex.Message);
             }
 
-            IconCache[path] = icon;
+            // Store apps link to shell:AppsFolder, not to a file, so there is
+            // nothing to extract from. The shell itself knows their artwork.
+            if (icon == null) icon = FromShell(path);
+
+            IconCache[key] = icon;
             return icon;
         }
 
@@ -242,6 +285,61 @@ namespace StreamDeckAudio
             finally
             {
                 DestroyIcon(handles[0]);
+            }
+        }
+
+        private static Bitmap FromShell(string path)
+        {
+            const int IconOnly = 0x4;
+
+            IntPtr handle = IntPtr.Zero;
+            try
+            {
+                IShellItemImageFactory factory;
+                SHCreateItemFromParsingName(path, IntPtr.Zero,
+                    typeof(IShellItemImageFactory).GUID, out factory);
+
+                if (factory.GetImage(new ShellSize { Width = 256, Height = 256 }, IconOnly, out handle) != 0 ||
+                    handle == IntPtr.Zero)
+                    return null;
+
+                // Image.FromHbitmap drops the alpha channel, so the pixels are
+                // copied out of the DIB section by hand.
+                BitmapInfo info;
+                if (GetObject(handle, Marshal.SizeOf(typeof(BitmapInfo)), out info) == 0 ||
+                    info.Bits == IntPtr.Zero || info.BitsPixel != 32)
+                    return null;
+
+                int height = Math.Abs(info.Height);
+                var result = new Bitmap(info.Width, height,
+                    System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                var data = result.LockBits(new Rectangle(0, 0, info.Width, height),
+                    System.Drawing.Imaging.ImageLockMode.WriteOnly, result.PixelFormat);
+                try
+                {
+                    var row = new byte[info.WidthBytes];
+                    for (int y = 0; y < height; y++)
+                    {
+                        // A positive height means the rows are stored bottom-up.
+                        int from = info.Height > 0 ? height - 1 - y : y;
+                        Marshal.Copy(info.Bits + from * info.WidthBytes, row, 0, row.Length);
+                        Marshal.Copy(row, 0, data.Scan0 + y * data.Stride, Math.Min(row.Length, data.Stride));
+                    }
+                }
+                finally
+                {
+                    result.UnlockBits(data);
+                }
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("shell icon failed for " + path + ": " + ex.Message);
+                return null;
+            }
+            finally
+            {
+                if (handle != IntPtr.Zero) DeleteObject(handle);
             }
         }
     }
