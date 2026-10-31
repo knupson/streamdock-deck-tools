@@ -120,7 +120,9 @@ namespace StreamDeckAudio
                 Shortcut item = items[Index(context, items.Count)];
                 string label = Bool(context, "showName", true) ? item.Name : string.Empty;
 
-                string key = item.Path + "\n" + label + "\n" + knob;
+                long ticks = 0;
+                try { ticks = File.GetLastWriteTimeUtc(item.Path).Ticks; } catch (Exception) { }
+                string key = item.Path + "\n" + ticks + "\n" + label + "\n" + knob;
                 string tile;
                 if (!_tiles.TryGetValue(key, out tile))
                 {

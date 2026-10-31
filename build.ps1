@@ -15,9 +15,15 @@ New-Item -ItemType Directory -Force $bin | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $plugin 'images') | Out-Null
 
 function Invoke-Csc {
-    param([string] $Out, [string[]] $Sources, [string] $Target = 'exe', [string[]] $Refs = @())
+    param(
+        [string]   $Out,
+        [string[]] $Sources,
+        [string]   $Target   = 'exe',
+        [string[]] $Refs     = @(),
+        [string]   $Platform = 'x64'
+    )
 
-    $arguments = @('/nologo', "/target:$Target", '/platform:x64', '/optimize+', "/out:$Out")
+    $arguments = @('/nologo', "/target:$Target", "/platform:$Platform", '/optimize+', "/out:$Out")
     foreach ($r in $Refs) { $arguments += "/reference:$r" }
     foreach ($s in $Sources) { $arguments += (Join-Path $root $s) }
 
@@ -81,6 +87,17 @@ Invoke-Csc -Out (Join-Path $bin 'DiscordProbe.exe') `
            -Sources @('src\AudioCore.cs', 'src\Json.cs', 'src\DiscordRpc.cs',
                       'src\DiscordAuth.cs', 'src\DiscordService.cs', 'tools\DiscordProbe.cs') `
            -Refs @('System.Web.Extensions.dll', 'System.Security.dll')
+
+# Playnite extension for bidirectional D:\Juegos <-> Playnite Installed sync.
+$playniteSdk = Join-Path $env:LOCALAPPDATA 'Playnite\Playnite.SDK.dll'
+if (Test-Path $playniteSdk) {
+    $playniteOut = Join-Path $root 'playnite\DeckToolsSync'
+    New-Item -ItemType Directory -Force $playniteOut | Out-Null
+    Invoke-Csc -Out (Join-Path $playniteOut 'DeckToolsPlaynite.dll') -Target 'library' -Platform 'anycpu' `
+               -Sources @('src\PlayniteSync.cs') `
+               -Refs @($playniteSdk, 'System.Drawing.dll')
+    Copy-Item (Join-Path $root 'playnite\extension.yaml') (Join-Path $playniteOut 'extension.yaml') -Force
+}
 
 # Icon generator, then the icons themselves.
 $genIcons = Join-Path $bin 'GenIcons.exe'

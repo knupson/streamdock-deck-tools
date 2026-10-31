@@ -24,14 +24,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$id      = 'com.knupwns.audioknob.sdPlugin'
-$source  = Join-Path $PSScriptRoot "plugin\$id"
-$dest    = Join-Path $env:APPDATA "HotSpot\StreamDock\plugins\$id"
-$packId  = 'com.knupwns.decktools.sdIconPack'
-$packSrc = Join-Path $PSScriptRoot "iconpack\$packId"
-$packDst = Join-Path $env:APPDATA "HotSpot\StreamDock\icons\$packId"
-$appExe  = 'C:\Program Files (x86)\Redragon Stream Station\Redragon Stream Station.exe'
-$appName = 'Redragon Stream Station'
+$id          = 'com.knupwns.audioknob.sdPlugin'
+$source      = Join-Path $PSScriptRoot "plugin\$id"
+$dest        = Join-Path $env:APPDATA "HotSpot\StreamDock\plugins\$id"
+$packId      = 'com.knupwns.decktools.sdIconPack'
+$packSrc     = Join-Path $PSScriptRoot "iconpack\$packId"
+$packDst     = Join-Path $env:APPDATA "HotSpot\StreamDock\icons\$packId"
+$playniteSrc = Join-Path $PSScriptRoot 'playnite\DeckToolsSync'
+$playniteDst = Join-Path $env:APPDATA 'Playnite\Extensions\DeckToolsSync'
+$playniteExe = Join-Path $env:LOCALAPPDATA 'Playnite\Playnite.DesktopApp.exe'
+$appExe      = 'C:\Program Files (x86)\Redragon Stream Station\Redragon Stream Station.exe'
+$appName     = 'Redragon Stream Station'
 
 # Logon task that starts the host elevated. It replaces the vendor's HKCU Run
 # entry, which started it medium-IL; see Start-App for why that matters.
@@ -53,6 +56,85 @@ function Clear-Folder {
 
     if (Test-Path $Path) { Get-ChildItem $Path -Force | Remove-Item -Recurse -Force }
     else { New-Item -ItemType Directory -Force $Path | Out-Null }
+}
+
+function Start-OnDefaultDesktop {
+    param(
+        [Parameter(Mandatory)] [string] $FilePath,
+        [string] $Arguments = ''
+    )
+
+    if (-not ('Win32DesktopLauncher' -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class Win32DesktopLauncher {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct STARTUPINFO {
+        public int cb;
+        public string lpReserved;
+        public string lpDesktop;
+        public string lpTitle;
+        public int dwX;
+        public int dwY;
+        public int dwXSize;
+        public int dwYSize;
+        public int dwXCountChars;
+        public int dwYCountChars;
+        public int dwFillAttribute;
+        public int dwFlags;
+        public short wShowWindow;
+        public short cbReserved2;
+        public IntPtr lpReserved2;
+        public IntPtr hStdInput;
+        public IntPtr hStdOutput;
+        public IntPtr hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PROCESS_INFORMATION {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public int dwProcessId;
+        public int dwThreadId;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool CreateProcessW(
+        string lpApplicationName,
+        string lpCommandLine,
+        IntPtr lpProcessAttributes,
+        IntPtr lpThreadAttributes,
+        bool bInheritHandles,
+        uint dwCreationFlags,
+        IntPtr lpEnvironment,
+        string lpCurrentDirectory,
+        ref STARTUPINFO lpStartupInfo,
+        out PROCESS_INFORMATION lpProcessInformation);
+
+    [DllImport("kernel32.dll")]
+    public static extern bool CloseHandle(IntPtr hObject);
+
+    public static int StartOnDefault(string exePath, string args, string workDir) {
+        var si = new STARTUPINFO();
+        si.cb = Marshal.SizeOf(si);
+        si.lpDesktop = "Winsta0\\Default";
+        PROCESS_INFORMATION pi;
+        string cmdLine = string.IsNullOrEmpty(args) ? ("\"" + exePath + "\"") : ("\"" + exePath + "\" " + args);
+        if (!CreateProcessW(exePath, cmdLine, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero, workDir, ref si, out pi)) {
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        }
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return pi.dwProcessId;
+    }
+}
+"@
+    }
+
+    $workDir = Split-Path -Parent $FilePath
+    return [Win32DesktopLauncher]::StartOnDefault($FilePath, $Arguments, $workDir)
 }
 
 function Stop-App {
@@ -236,7 +318,7 @@ if ($RemoveAutostart) {
 
 if ($Remove) {
     Stop-App
-    foreach ($target in @($dest, $packDst)) {
+    foreach ($target in @($dest, $packDst, $playniteDst)) {
         if (Test-Path $target) { Remove-Item $target -Recurse -Force; Write-Output "removed: $target" }
         else { Write-Output "nothing installed at $target" }
     }
@@ -270,6 +352,30 @@ if (Test-Path $packSrc) {
 
     $count = (Get-ChildItem (Join-Path $packDst 'icons') -File).Count
     Write-Output "installed icon pack: $packDst ($count icons)"
+}
+
+# Playnite extension for bidirectional D:\Juegos <-> Playnite Installed sync.
+if (Test-Path (Join-Path $playniteSrc 'DeckToolsPlaynite.dll')) {
+    $playniteRunning = Get-Process -Name 'Playnite.DesktopApp' -ErrorAction SilentlyContinue
+    if ($playniteRunning) {
+        Write-Output 'stopping Playnite.DesktopApp...'
+        $playniteRunning | Stop-Process -Force
+        Start-Sleep -Seconds 2
+    }
+    $safeStartFlag = Join-Path $env:APPDATA 'Playnite\safestart.flag'
+    if (Test-Path $safeStartFlag) {
+        Remove-Item $safeStartFlag -Force -ErrorAction SilentlyContinue
+    }
+
+    Clear-Folder $playniteDst
+    Copy-Item (Join-Path $playniteSrc '*') $playniteDst -Recurse -Force
+    Write-Output "installed Playnite extension: $playniteDst"
+
+    if (($playniteRunning -or $Restart) -and (Test-Path $playniteExe)) {
+        Write-Output 'starting Playnite.DesktopApp...'
+        $playnitePid = Start-OnDefaultDesktop -FilePath $playniteExe
+        Write-Output "  running Playnite.DesktopApp on Default desktop (pid $playnitePid)"
+    }
 }
 
 if ($Restart) { Start-App }
