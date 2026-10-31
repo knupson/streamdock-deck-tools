@@ -117,6 +117,8 @@ namespace StreamDeckAudio
         /// <summary>Files in the folder, sorted by name. Directories are skipped.</summary>
         public static List<Shortcut> List(string folder)
         {
+            ClearPlayniteSafeStartFlag();
+
             var result = new List<Shortcut>();
 
             string resolved = Resolve(folder);
@@ -162,6 +164,7 @@ namespace StreamDeckAudio
         {
             try
             {
+                ClearPlayniteSafeStartFlag();
                 Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
                 Log.Write("launched " + path);
                 return true;
@@ -173,28 +176,61 @@ namespace StreamDeckAudio
             }
         }
 
+        private static void ClearPlayniteSafeStartFlag()
+        {
+            try
+            {
+                string flag = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "Playnite",
+                    "safestart.flag");
+                if (File.Exists(flag))
+                    File.Delete(flag);
+            }
+            catch (Exception) { }
+        }
+
         /// <summary>The item's own icon at the largest size available, or null.</summary>
         public static Bitmap Icon(string path)
         {
+            string source = null;
+            int index = 0;
+            bool hasSource = false;
+            try
+            {
+                hasSource = IconSource(path, out source, out index);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("icon lookup failed for " + path + ": " + ex.Message);
+            }
+
             // Keyed by write time too: giving a shortcut a new icon rewrites the
             // file, and the process lives far longer than any one icon choice.
             string key;
-            try { key = path + "|" + File.GetLastWriteTimeUtc(path).Ticks; }
+            try
+            {
+                long pathTicks = File.GetLastWriteTimeUtc(path).Ticks;
+                long srcTicks = (hasSource && !string.IsNullOrEmpty(source) && File.Exists(source))
+                    ? File.GetLastWriteTimeUtc(source).Ticks : 0;
+                key = path + "|" + pathTicks + "|" + (source ?? string.Empty) + "|" + srcTicks;
+            }
             catch (Exception) { key = path; }
 
             Bitmap cached;
             if (IconCache.TryGetValue(key, out cached)) return cached;
 
             Bitmap icon = null;
-            try
+            if (hasSource)
             {
-                string source;
-                int index;
-                if (IconSource(path, out source, out index)) icon = Extract(source, index);
-            }
-            catch (Exception ex)
-            {
-                Log.Write("icon lookup failed for " + path + ": " + ex.Message);
+                try
+                {
+                    icon = Extract(source, index);
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("icon extract failed for " + path + ": " + ex.Message);
+                }
             }
 
             // Store apps link to shell:AppsFolder, not to a file, so there is
@@ -269,6 +305,23 @@ namespace StreamDeckAudio
 
         private static Bitmap Extract(string file, int index)
         {
+            string ext = System.IO.Path.GetExtension(file);
+            if (ext.Equals(".png", StringComparison.OrdinalIgnoreCase) ||
+                ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
+                ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) ||
+                ext.Equals(".bmp", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    using (Image img = Image.FromFile(file))
+                        return new Bitmap(img);
+                }
+                catch (Exception)
+                {
+                    return null;
+                }
+            }
+
             var handles = new IntPtr[1];
             var ids = new int[1];
 
