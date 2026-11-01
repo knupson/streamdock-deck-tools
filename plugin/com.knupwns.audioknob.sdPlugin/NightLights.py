@@ -25,6 +25,9 @@ DECK_ON_BRIGHTNESS = 100
 NO_WINDOW = 0x08000000
 
 LOG = os.path.join(os.environ.get("APPDATA", "."), "DeckTools", "nightlights.log")
+# Set once the snapshot holds the real colours; a second "off" while dark must
+# not overwrite it with black.
+SNAPSHOT_TAKEN = os.path.join(os.environ.get("APPDATA", "."), "DeckTools", "rgb-snapshot.taken")
 
 
 def log(msg):
@@ -51,7 +54,9 @@ def rgb_off():
     from openrgb.utils import RGBColor
     c = OpenRGBClient("127.0.0.1", 6742, "decktools-blackout")
     try:
-        c.save_profile(RGB_SNAPSHOT)
+        if not os.path.exists(SNAPSHOT_TAKEN):
+            c.save_profile(RGB_SNAPSHOT)
+            open(SNAPSHOT_TAKEN, "w").close()
         for d in c.devices:
             modes = [m.name.lower() for m in d.modes]
             if "off" in modes:
@@ -73,6 +78,8 @@ def rgb_on():
         c.update_profiles()
         names = [p.name for p in c.profiles]
         c.load_profile(RGB_SNAPSHOT if RGB_SNAPSHOT in names else RGB_FALLBACK)
+        if os.path.exists(SNAPSHOT_TAKEN):
+            os.remove(SNAPSHOT_TAKEN)
     finally:
         c.disconnect()
 

@@ -126,6 +126,12 @@ namespace StreamDeckAudio
         [PreserveSig] int SetMasterVolumeLevelScalar(float level, ref Guid eventContext);
         [PreserveSig] int GetMasterVolumeLevel(out float levelDb);
         [PreserveSig] int GetMasterVolumeLevelScalar(out float level);
+        [PreserveSig] int SetChannelVolumeLevel(int channel, float levelDb, ref Guid eventContext);
+        [PreserveSig] int SetChannelVolumeLevelScalar(int channel, float level, ref Guid eventContext);
+        [PreserveSig] int GetChannelVolumeLevel(int channel, out float levelDb);
+        [PreserveSig] int GetChannelVolumeLevelScalar(int channel, out float level);
+        [PreserveSig] int SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, ref Guid eventContext);
+        [PreserveSig] int GetMute([MarshalAs(UnmanagedType.Bool)] out bool mute);
     }
 
     [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
@@ -401,6 +407,19 @@ namespace StreamDeckAudio
             Guid noContext = Guid.Empty;
             float clamped = Math.Min(1f, Math.Max(0f, level));
             Marshal.ThrowExceptionForHR(Activate().SetMasterVolumeLevelScalar(clamped, ref noContext));
+        }
+
+        public static bool GetMute()
+        {
+            bool muted;
+            Marshal.ThrowExceptionForHR(Activate().GetMute(out muted));
+            return muted;
+        }
+
+        public static void SetMute(bool mute)
+        {
+            Guid noContext = Guid.Empty;
+            Marshal.ThrowExceptionForHR(Activate().SetMute(mute, ref noContext));
         }
 
         private static IAudioEndpointVolume Activate()
