@@ -73,11 +73,24 @@ def rgb_off():
 
 def rgb_on():
     from openrgb import OpenRGBClient
+    from openrgb.utils import ModeColors
     c = OpenRGBClient("127.0.0.1", 6742, "decktools-blackout")
     try:
         c.update_profiles()
         names = [p.name for p in c.profiles]
         c.load_profile(RGB_SNAPSHOT if RGB_SNAPSHOT in names else RGB_FALLBACK)
+        # The motherboard's ARGB header (case and CPU coolers) stays dark after
+        # the profile restores its Static mode; sending that mode and its
+        # colour again wakes it up. The profile applies asynchronously, so the
+        # state is read back only after it settles.
+        time.sleep(1.5)
+        c.update()
+        for d in c.devices:
+            mode = d.modes[d.active_mode]
+            if mode.color_mode == ModeColors.MODE_SPECIFIC and mode.colors:
+                colors = list(mode.colors)
+                d.set_mode(mode.name)
+                d.set_colors(colors)
         if os.path.exists(SNAPSHOT_TAKEN):
             os.remove(SNAPSHOT_TAKEN)
     finally:
