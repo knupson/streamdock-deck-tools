@@ -100,9 +100,16 @@ $playniteSdk = Join-Path $env:LOCALAPPDATA 'Playnite\Playnite.SDK.dll'
 if (Test-Path $playniteSdk) {
     $playniteOut = Join-Path $root 'playnite\DeckToolsSync'
     New-Item -ItemType Directory -Force $playniteOut | Out-Null
-    Invoke-Csc -Out (Join-Path $playniteOut 'DeckToolsPlaynite.dll') -Target 'library' -Platform 'anycpu' `
-               -Sources @('src\PlayniteSync.cs') `
-               -Refs @($playniteSdk, 'System.Drawing.dll')
+    # Only when the source changed: csc is not deterministic, so a needless
+    # rebuild yields a "new" DLL and the installer restarts Playnite for it.
+    $playniteDll = Join-Path $playniteOut 'DeckToolsPlaynite.dll'
+    $playniteSrcFile = Join-Path $root 'src\PlayniteSync.cs'
+    if (-not (Test-Path $playniteDll) -or
+        (Get-Item $playniteSrcFile).LastWriteTimeUtc -gt (Get-Item $playniteDll).LastWriteTimeUtc) {
+        Invoke-Csc -Out $playniteDll -Target 'library' -Platform 'anycpu' `
+                   -Sources @('src\PlayniteSync.cs') `
+                   -Refs @($playniteSdk, 'System.Drawing.dll')
+    }
     Copy-Item (Join-Path $root 'playnite\extension.yaml') (Join-Path $playniteOut 'extension.yaml') -Force
 }
 
