@@ -152,6 +152,7 @@ namespace StreamDeckAudio
             if (Active())
             {
                 Stop();
+                Lights("on");
             }
             else
             {
@@ -167,6 +168,7 @@ namespace StreamDeckAudio
                 {
                     _overlay = Process.Start(new ProcessStartInfo(exe) { UseShellExecute = false });
                     Log.Write("blackout: overlay started");
+                    Lights("off");
                 }
                 catch (Exception ex)
                 {
@@ -182,7 +184,36 @@ namespace StreamDeckAudio
             if (_overlay == null || !_overlay.HasExited) return;
 
             _overlay = null; // dismissed from the keyboard or mouse
+            Lights("on");
             RenderAll();
+        }
+
+        // RGB, case panel and deck backlight go dark with the overlay and come
+        // back with it. NightLights.py does the work in its own process so a slow
+        // device never blocks the plugin thread; it logs to nightlights.log.
+        private static void Lights(string action)
+        {
+            try
+            {
+                string script = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "NightLights.py");
+                string pythonw = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                              @"Programs\Python\Python313\pythonw.exe");
+                if (!File.Exists(script) || !File.Exists(pythonw))
+                {
+                    Log.Write("blackout: lights skipped, missing " + (File.Exists(script) ? pythonw : script));
+                    return;
+                }
+                Process.Start(new ProcessStartInfo(pythonw, "-I \"" + script + "\" " + action)
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+                Log.Write("blackout: lights " + action);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("blackout: lights " + action + " failed: " + ex.Message);
+            }
         }
 
         protected override void Render(string context)
