@@ -113,6 +113,9 @@ internal static class GenIcons
         Write(Path.Combine(dir, "iot-bedtime.png"), 144, DrawIotMoon);
         Write(Path.Combine(dir, "iot-temp.png"), 144, DrawIotTemperature);
         Write(Path.Combine(dir, "iot-off.png"), 144, DrawIotPower);
+        Write(Path.Combine(dir, "iot-plug.png"), 144, DrawIotPlug);
+        Write(Path.Combine(dir, "iot-purifier.png"), 144, DrawIotPurifier);
+        Write(Path.Combine(dir, "iot-vacuum.png"), 144, DrawIotVacuum);
         Write(Path.Combine(dir, "screens.png"), 144, DrawScreens);
         Write(Path.Combine(dir, "screens-off.png"), 144,
               delegate(Graphics g) { DrawScreens(g); DrawSlash(g); });
@@ -1197,6 +1200,41 @@ internal static class GenIcons
         {
             g.DrawArc(pen, 52, 53, 40, 39, -48, 276);
             g.DrawLine(pen, 72, 49, 72, 70);
+        }
+    }
+
+    private static void DrawIotPlug(Graphics g)
+    {
+        using (Brush chrome = Chrome(ValueGlyphTop, ValueGlyphBottom))
+        using (var pen = new Pen(chrome, 6) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+        {
+            g.DrawLine(pen, 63, 50, 63, 63);
+            g.DrawLine(pen, 81, 50, 81, 63);
+            using (GraphicsPath body = Rounded(new RectangleF(53, 61, 38, 24), 8f)) g.FillPath(chrome, body);
+            g.DrawLine(pen, 72, 82, 72, 94);
+        }
+    }
+
+    private static void DrawIotPurifier(Graphics g)
+    {
+        using (Brush chrome = Chrome(ValueGlyphTop, ValueGlyphBottom))
+        using (var black = new Pen(Color.Black, 3))
+        using (GraphicsPath body = Rounded(new RectangleF(52, 48, 40, 48), 7f))
+        {
+            g.FillPath(chrome, body);
+            for (int y = 61; y <= 85; y += 8) g.DrawLine(black, 60, y, 84, y);
+        }
+    }
+
+    private static void DrawIotVacuum(Graphics g)
+    {
+        using (Brush chrome = Chrome(ValueGlyphTop, ValueGlyphBottom))
+        using (var black = new Pen(Color.Black, 3))
+        {
+            g.FillEllipse(chrome, 48, 48, 48, 48);
+            g.DrawArc(black, 54, 54, 36, 36, 5, 170);
+            g.DrawEllipse(black, 65, 57, 14, 12);
+            g.DrawLine(black, 66, 84, 78, 84);
         }
     }
 

@@ -41,6 +41,36 @@
       "PropertyInspectorPath": "iotlights.html"
     },
     {
+      "Icon": "images/iot-plug",
+      "Name": "IoT — Enchufe",
+      "States": [{ "Image": "images/iot-plug", "TitleAlignment": "top", "FontSize": "10" }],
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Prendé o apagá el enchufe Noche o Vestidor",
+      "UUID": "com.knupwns.audioknob.iot.plug",
+      "PropertyInspectorPath": "iotplug.html"
+    },
+    {
+      "Icon": "images/iot-purifier",
+      "Name": "IoT — Purificador",
+      "States": [{ "Image": "images/iot-purifier", "TitleAlignment": "top", "FontSize": "10" }],
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Toque: prendé o apagá. Toque largo: cambiá la velocidad",
+      "UUID": "com.knupwns.audioknob.iot.purifier",
+      "PropertyInspectorPath": "separator.html"
+    },
+    {
+      "Icon": "images/iot-vacuum",
+      "Name": "IoT — Isaura",
+      "States": [{ "Image": "images/iot-vacuum", "TitleAlignment": "top", "FontSize": "10" }],
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Según el estado: limpiá, pausá o volvé a la base",
+      "UUID": "com.knupwns.audioknob.iot.vacuum",
+      "PropertyInspectorPath": "separator.html"
+    },
+    {
       "Icon": "images/action",
       "Name": "Audio Output Knob",
       "States": [

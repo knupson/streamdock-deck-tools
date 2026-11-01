@@ -23,6 +23,7 @@ namespace StreamDeckAudio
             public DateTime Due;
             public int Version;
             public bool Refresh;
+            public string TuyaAction;
             public bool Identify;
             public int? RestoreBrightness;
         }
@@ -239,6 +240,51 @@ namespace StreamDeckAudio
             }
             Notify();
         }
+        private void QueueTuya(string alias, string action)
+        {
+            lock (_gate)
+            {
+                IotTuyaDevice device;
+                if (_disposed || !_config.Tuya.TryGetValue(alias, out device)) return;
+                _queue.Add(new Work { Device = device, TuyaAction = action });
+                Wake();
+            }
+        }
+
+        public void TogglePlug(string alias)
+        {
+            if (alias == "noche" || alias == "vestidor") QueueTuya(alias, "toggle");
+        }
+        public void TogglePurifier() { QueueTuya("purificador", "toggle"); }
+        public void NextPurifierSpeed() { QueueTuya("purificador", "speed"); }
+        public void VacuumStep() { QueueTuya("aspiradora", "vacuum"); }
+
+        private static Dictionary<string, object> TuyaCommand(string action, Dictionary<string, object> status)
+        {
+            if (status == null) return null;
+            if (action == "toggle")
+            {
+                object on;
+                if (!status.TryGetValue("1", out on) || !(on is bool)) return null;
+                return new Dictionary<string, object> { { "1", !(bool)on } };
+            }
+            if (action == "speed")
+            {
+                string[] speeds = { "sleep", "low", "mid", "high", "auto" };
+                int index = Array.IndexOf(speeds, Json.Str(status, "4"));
+                return index < 0 ? null : new Dictionary<string, object> { { "4", speeds[(index + 1) % speeds.Length] } };
+            }
+            string dp;
+            switch (Json.Str(status, "5"))
+            {
+                case "standby": case "charging": case "charge_done": case "sleep": dp = "1"; break;
+                case "cleaning": case "zone_clean": case "part_clean": case "goto_pos": dp = "2"; break;
+                case "paused": dp = "3"; break;
+                default: return null;
+            }
+            return new Dictionary<string, object> { { dp, true } };
+        }
+
         public void Identify(IotLight light)
         {
             lock (_gate)
@@ -310,7 +356,18 @@ namespace StreamDeckAudio
             else
             {
                 Dictionary<string, object> status = null;
-                try { if (_tuya.Set(work.Device, work.Values)) status = _tuya.Status(work.Device); } catch (Exception) { }
+                try
+                {
+                    Dictionary<string, object> values = work.Values;
+                    if (work.TuyaAction != null)
+                    {
+                        status = _tuya.Status(work.Device);
+                        values = TuyaCommand(work.TuyaAction, status);
+                    }
+                    if (values != null)
+                        status = _tuya.Set(work.Device, values) ? _tuya.Status(work.Device) : null;
+                }
+                catch (Exception) { status = null; }
                 lock (_gate) _tuyaStatus[work.Device.Alias] = status == null ? null : new Dictionary<string, object>(status);
             }
         }

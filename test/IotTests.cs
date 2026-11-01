@@ -254,6 +254,7 @@ namespace StreamDeckAudio
         }
         private sealed class FakeTuya : ITuyaLink
         {
+            public readonly Dictionary<string, Dictionary<string, object>> States = new Dictionary<string, Dictionary<string, object>>();
             public readonly List<Sent> Sent = new List<Sent>();
             public int Gets;
             public string Broken;
@@ -261,12 +262,17 @@ namespace StreamDeckAudio
             {
                 Gets++;
                 if (d.Alias == Broken) throw new IOException("Equipo inventado sin respuesta");
-                return new Dictionary<string, object> { { "1", false } };
+                Dictionary<string, object> state;
+                return States.TryGetValue(d.Alias, out state) ? new Dictionary<string, object>(state)
+                    : new Dictionary<string, object> { { "1", false } };
             }
             public bool Set(IotTuyaDevice d, IDictionary<string, object> dps)
             {
                 Sent.Add(new Sent { Target = d.Alias, Values = new Dictionary<string, object>(dps) });
                 if (d.Alias == Broken) throw new IOException("Equipo inventado sin respuesta");
+                Dictionary<string, object> state;
+                if (States.TryGetValue(d.Alias, out state))
+                    foreach (KeyValuePair<string, object> dp in dps) state[dp.Key] = dp.Value;
                 return true;
             }
         }
@@ -509,6 +515,89 @@ namespace StreamDeckAudio
             }
         }
 
+        private static void Vacuum_StepByStatus()
+        {
+            string[] states = { "standby", "charging", "charge_done", "sleep", "cleaning", "zone_clean", "part_clean", "goto_pos", "paused", "goto_charge", "unknown" };
+            string[] dps = { "1", "1", "1", "1", "2", "2", "2", "2", "3", null, null };
+            using (var f = new HubFixture())
+            {
+                for (int i = 0; i < states.Length; i++)
+                {
+                    f.Tuya.Sent.Clear();
+                    f.Tuya.States["aspiradora"] = new Dictionary<string, object> { { "5", states[i] } };
+                    int gets = f.Tuya.Gets;
+                    f.Hub.VacuumStep();
+                    Check.Equal("Isaura sin I/O al encolar", gets, f.Tuya.Gets);
+                    Check.Equal("Isaura sin envío al encolar", 0, f.Tuya.Sent.Count);
+                    f.Hub.Flush();
+                    Check.Equal("Vacuum_StepByStatus: " + states[i], dps[i] == null ? 0 : 1, f.Tuya.Sent.Count);
+                    if (dps[i] == null) continue;
+                    Check.Equal("destino Isaura", "aspiradora", f.Tuya.Sent[0].Target);
+                    Check.Equal("un solo DP", 1, f.Tuya.Sent[0].Values.Count);
+                    Check.Equal("DP de Isaura", true, (bool)f.Tuya.Sent[0].Values[dps[i]]);
+                }
+                f.Tuya.Broken = "aspiradora";
+                f.Tuya.Sent.Clear();
+                f.Hub.VacuumStep();
+                f.Hub.Flush();
+                Check.Equal("Isaura sin respuesta no recibe comandos", 0, f.Tuya.Sent.Count);
+                Check.Equal<Dictionary<string, object>>("Isaura muestra error", null, f.Hub.TuyaStatus("aspiradora"));
+            }
+        }
+
+        private static void Purifier_SpeedCycle()
+        {
+            using (var f = new HubFixture())
+            {
+                f.Tuya.States["purificador"] = new Dictionary<string, object> { { "1", false }, { "4", "auto" }, { "5", 12 } };
+                foreach (string speed in new string[] { "sleep", "low", "mid", "high", "auto", "sleep" })
+                {
+                    int gets = f.Tuya.Gets, sent = f.Tuya.Sent.Count;
+                    f.Hub.NextPurifierSpeed();
+                    Check.Equal("velocidad sin I/O al encolar", gets, f.Tuya.Gets);
+                    Check.Equal("velocidad sin envío al encolar", sent, f.Tuya.Sent.Count);
+                    f.Hub.Flush();
+                    Sent last = f.Tuya.Sent[f.Tuya.Sent.Count - 1];
+                    Check.Equal("destino purificador", "purificador", last.Target);
+                    Check.Equal("sólo DP4", 1, last.Values.Count);
+                    Check.Equal("Purifier_SpeedCycle", speed, (string)last.Values["4"]);
+                    Check.Equal("velocidad no prende el equipo", false, (bool)f.Hub.TuyaStatus("purificador")["1"]);
+                    Check.Equal("filtro conservado", 12, (int)f.Hub.TuyaStatus("purificador")["5"]);
+                }
+            }
+        }
+
+        private static void Tuya_TogglesAndFailures()
+        {
+            using (var f = new HubFixture())
+            {
+                foreach (string alias in new string[] { "noche", "vestidor", "purificador" })
+                {
+                    f.Tuya.States[alias] = new Dictionary<string, object> { { "1", false } };
+                    int sent = f.Tuya.Sent.Count, gets = f.Tuya.Gets;
+                    for (int i = 0; i < 2; i++)
+                        if (alias == "purificador") f.Hub.TogglePurifier(); else f.Hub.TogglePlug(alias);
+                    Check.Equal("toggle sin I/O", gets, f.Tuya.Gets);
+                    Check.Equal("toggle sin envío", sent, f.Tuya.Sent.Count);
+                    f.Hub.Flush();
+                    Check.Equal("dos toques conservados", sent + 2, f.Tuya.Sent.Count);
+                    Check.Equal("toggle prende", true, (bool)f.Tuya.Sent[sent].Values["1"]);
+                    Check.Equal("toggle apaga", false, (bool)f.Tuya.Sent[sent + 1].Values["1"]);
+                }
+                f.Tuya.Sent.Clear();
+                f.Hub.TogglePlug("aspiradora");
+                f.Hub.TogglePlug("inexistente");
+                f.Tuya.States["purificador"] = new Dictionary<string, object>();
+                f.Hub.TogglePurifier();
+                f.Hub.NextPurifierSpeed();
+                f.Tuya.Broken = "noche";
+                f.Hub.TogglePlug("noche");
+                f.Hub.Flush();
+                Check.Equal("datos inválidos no envían comandos", 0, f.Tuya.Sent.Count);
+                Check.Equal<Dictionary<string, object>>("enchufe sin respuesta", null, f.Hub.TuyaStatus("noche"));
+            }
+        }
+
         private static int Live()
         {
             IotConfig cfg = IotConfig.Load(IotConfig.DefaultFolder);
@@ -561,6 +650,9 @@ namespace StreamDeckAudio
                 Brightness_CoalescesBurst();
                 Polling_VisibilityCacheAndFailures();
                 Identify_RestoresWithoutManual();
+                Vacuum_StepByStatus();
+                Purifier_SpeedCycle();
+                Tuya_TogglesAndFailures();
                 return Check.Report();
             }
             catch (Exception ex) { Console.WriteLine("FALLA: " + ex.Message); return 1; }

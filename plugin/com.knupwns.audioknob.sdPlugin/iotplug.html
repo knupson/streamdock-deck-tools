@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Enchufe</title>
+  <link rel="stylesheet" href="pi.css" />
+</head>
+<body>
+  <div class="row">
+    <div class="label">Enchufe</div>
+    <div class="value">
+      <select id="plug">
+        <option value="noche">Noche</option>
+        <option value="vestidor">Vestidor</option>
+      </select>
+    </div>
+  </div>
+  <p class="hint">Un toque prende o apaga el enchufe elegido.</p>
+  <script src="pi.js"></script>
+  <script>
+    const plugSelect = document.getElementById('plug');
+    plugSelect.addEventListener('change', function (event) { PI.set('plug', event.target.value); });
+    PI.ready(function (settings) { plugSelect.value = settings.plug || 'noche'; });
+  </script>
+</body>
+</html>

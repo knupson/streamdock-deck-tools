@@ -201,6 +201,73 @@ namespace StreamDeckAudio
         }
     }
 
+    internal sealed class IotPlugAction : IotAction
+    {
+        public override string Uuid { get { return "com.knupwns.audioknob.iot.plug"; } }
+        protected override bool DefaultsToKnob { get { return false; } }
+        private string Alias(string context) { return Str(context, "plug", "noche") == "vestidor" ? "vestidor" : "noche"; }
+        public override void Press(string context) { Hub.TogglePlug(Alias(context)); }
+        protected override void Render(string context)
+        {
+            string alias = Alias(context);
+            Dictionary<string, object> status = Hub.TuyaStatus(alias);
+            string value = status == null || !status.ContainsKey("1") ? "sin datos" : Json.Bool(status, "1", false) ? "ON" : "OFF";
+            Show(context, KeyImage.Glyph("iot-plug", alias == "noche" ? "Noche" : "Vestidor", value, OnKnob(context)));
+        }
+    }
+
+    internal sealed class IotPurifierAction : IotAction
+    {
+        public override string Uuid { get { return "com.knupwns.audioknob.iot.purifier"; } }
+        protected override bool DefaultsToKnob { get { return false; } }
+        protected override bool HandlesLongPress { get { return true; } }
+        public override void Press(string context) { Hub.TogglePurifier(); }
+        public override void LongPress(string context) { Hub.NextPurifierSpeed(); }
+        protected override void Render(string context)
+        {
+            Dictionary<string, object> status = Hub.TuyaStatus("purificador");
+            string speed = Json.Str(status, "4") ?? "sin datos";
+            string title = status == null ? "Purificador" : (Json.Bool(status, "1", false) ? "ON " : "OFF ") + speed;
+            int filter = Json.Int(status, "5", -1);
+            string value = filter < 0 ? "sin datos" : "filtro " + filter + "%";
+            Show(context, filter >= 0 && filter <= 15
+                ? KeyImage.Glyph("iot-purifier", title, value, OnKnob(context), KeyImage.Warn)
+                : KeyImage.Glyph("iot-purifier", title, value, OnKnob(context)));
+        }
+    }
+
+    internal sealed class IotVacuumAction : IotAction
+    {
+        private readonly Dictionary<string, int> _faults = new Dictionary<string, int>();
+        public override string Uuid { get { return "com.knupwns.audioknob.iot.vacuum"; } }
+        protected override bool DefaultsToKnob { get { return false; } }
+        public override void Press(string context) { Hub.VacuumStep(); }
+        public override void WillDisappear(string context)
+        {
+            base.WillDisappear(context);
+            _faults.Remove(context);
+        }
+        protected override void Render(string context)
+        {
+            Dictionary<string, object> status = Hub.TuyaStatus("aspiradora");
+            string state;
+            switch (Json.Str(status, "5"))
+            {
+                case "standby": case "charging": case "charge_done": case "sleep": state = "en base"; break;
+                case "cleaning": case "zone_clean": case "part_clean": case "goto_pos": state = "limpiando"; break;
+                case "paused": state = "en pausa"; break;
+                case "goto_charge": state = "volviendo"; break;
+                default: state = status == null ? "sin datos" : "desconocido"; break;
+            }
+            int fault = Json.Int(status, "28", 0), previous;
+            if (fault != 0 && (!_faults.TryGetValue(context, out previous) || previous != fault)) Host.ShowAlert(context);
+            _faults[context] = fault;
+            int battery = Json.Int(status, "8", -1);
+            string value = fault != 0 ? "falla" : battery < 0 ? "sin datos" : "batería " + battery + "%";
+            Show(context, KeyImage.Glyph("iot-vacuum", "Isaura: " + state, value, OnKnob(context)));
+        }
+    }
+
     internal sealed class IotLightsAction : IotAction
     {
         public override string Uuid { get { return "com.knupwns.audioknob.iot.lights"; } }
