@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Paleta de luces</title>
+  <link rel="stylesheet" href="pi.css" />
+</head>
+<body>
+  <div class="row">
+    <div class="label">Colores</div>
+    <div class="value"><input id="colors" type="text" style="width:100%" /></div>
+  </div>
+  <p class="hint">Escribí colores <b>#rrggbb</b> separados por espacios.
+    <b>Girá</b> para ver la muestra; <b>apretá</b> para aplicarla a lo elegido.
+    Los valores inválidos se omiten; si no queda ninguno, se usa la paleta por defecto.</p>
+  <script src="pi.js"></script>
+  <script>
+    const setColors = PI.text('colors', 'colors', '#ff0000 #ff6400 #ffc800 #00ff00 #00c8ff #0000ff #9600ff #ff0078');
+    PI.ready(function (settings) { setColors(settings.colors); });
+  </script>
+</body>
+</html>

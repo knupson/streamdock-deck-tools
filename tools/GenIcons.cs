@@ -105,6 +105,14 @@ internal static class GenIcons
         Write(Path.Combine(dir, "mixer-muted.png"), 144,
               delegate(Graphics g) { DrawMixer(g); DrawSlash(g); });
         Write(Path.Combine(dir, "sun.png"), 144, DrawSun);
+        Write(Path.Combine(dir, "iot-selector.png"), 144, DrawIotBulb);
+        Write(Path.Combine(dir, "iot-palette.png"), 144, DrawIotPalette);
+        WriteFitted(Path.Combine(dir, "iot-brightness.png"), new RectangleF(40, 40, 64, 64),
+                    ValueGlyphTop, ValueGlyphBottom, DrawSun);
+        Write(Path.Combine(dir, "iot-rhythm.png"), 144, DrawIotRhythm);
+        Write(Path.Combine(dir, "iot-bedtime.png"), 144, DrawIotMoon);
+        Write(Path.Combine(dir, "iot-temp.png"), 144, DrawIotTemperature);
+        Write(Path.Combine(dir, "iot-off.png"), 144, DrawIotPower);
         Write(Path.Combine(dir, "screens.png"), 144, DrawScreens);
         Write(Path.Combine(dir, "screens-off.png"), 144,
               delegate(Graphics g) { DrawScreens(g); DrawSlash(g); });
@@ -1114,6 +1122,81 @@ internal static class GenIcons
                     g.FillPath(chrome, bar);
                 x += 22f;
             }
+        }
+    }
+
+    private static void DrawIotBulb(Graphics g)
+    {
+        using (Brush chrome = Chrome(ValueGlyphTop, ValueGlyphBottom))
+        {
+            g.FillEllipse(chrome, 55, 48, 34, 34);
+            g.FillRectangle(chrome, 62, 72, 20, 14);
+            g.FillRectangle(chrome, 64, 89, 16, 5);
+        }
+    }
+
+    private static void DrawIotPalette(Graphics g)
+    {
+        using (Brush chrome = Chrome(ValueGlyphTop, ValueGlyphBottom))
+        {
+            g.FillEllipse(chrome, 46, 48, 52, 48);
+            using (Brush black = new SolidBrush(Color.Black))
+            {
+                g.FillEllipse(black, 75, 75, 24, 22);
+                g.FillEllipse(black, 56, 60, 8, 8);
+                g.FillEllipse(black, 71, 55, 8, 8);
+                g.FillEllipse(black, 83, 65, 8, 8);
+                g.FillEllipse(black, 55, 76, 8, 8);
+            }
+        }
+    }
+
+    private static void DrawIotRhythm(Graphics g)
+    {
+        using (Brush chrome = Chrome(ValueGlyphTop, ValueGlyphBottom))
+        using (var pen = new Pen(chrome, 7) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+        {
+            g.DrawArc(pen, 51, 51, 42, 42, 40, 285);
+            g.FillPolygon(chrome, new PointF[] { new PointF(87, 48), new PointF(99, 60), new PointF(82, 63) });
+            g.DrawLine(pen, 72, 60, 72, 73);
+            g.DrawLine(pen, 72, 73, 81, 77);
+        }
+    }
+
+    private static void DrawIotMoon(Graphics g)
+    {
+        using (Brush chrome = Chrome(ValueGlyphTop, ValueGlyphBottom))
+        using (var moon = new Region(new Rectangle(0, 0, 0, 0)))
+        using (var outer = new GraphicsPath())
+        using (var inner = new GraphicsPath())
+        {
+            outer.AddEllipse(50, 48, 46, 46);
+            inner.AddEllipse(65, 40, 42, 42);
+            moon.Union(outer);
+            moon.Exclude(inner);
+            g.FillRegion(chrome, moon);
+        }
+    }
+
+    private static void DrawIotTemperature(Graphics g)
+    {
+        using (Brush chrome = Chrome(ValueGlyphTop, ValueGlyphBottom))
+        using (var pen = new Pen(chrome, 7) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+        {
+            g.DrawLine(pen, 65, 53, 65, 80);
+            g.FillEllipse(chrome, 55, 75, 20, 20);
+            g.DrawLine(pen, 80, 56, 88, 56);
+            g.DrawLine(pen, 80, 68, 86, 68);
+        }
+    }
+
+    private static void DrawIotPower(Graphics g)
+    {
+        using (Brush chrome = Chrome(ValueGlyphTop, ValueGlyphBottom))
+        using (var pen = new Pen(chrome, 8) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+        {
+            g.DrawArc(pen, 52, 53, 40, 39, -48, 276);
+            g.DrawLine(pen, 72, 49, 72, 70);
         }
     }
 

@@ -1,6 +1,46 @@
 {
   "Actions": [
     {
+      "Icon": "images/iot-selector",
+      "Name": "IoT — Selector",
+      "States": [{ "Image": "images/iot-selector", "TitleAlignment": "top", "FontSize": "10" }],
+      "Controllers": ["Knob"],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Girá para elegir una luz o grupo; apretá para prender o apagar",
+      "UUID": "com.knupwns.audioknob.iot.selector",
+      "PropertyInspectorPath": "iotselector.html"
+    },
+    {
+      "Icon": "images/iot-palette",
+      "Name": "IoT — Paleta",
+      "States": [{ "Image": "images/iot-palette", "TitleAlignment": "top", "FontSize": "10" }],
+      "Controllers": ["Knob"],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Girá para ver un color; apretá para aplicarlo a lo elegido",
+      "UUID": "com.knupwns.audioknob.iot.palette",
+      "PropertyInspectorPath": "iotpalette.html"
+    },
+    {
+      "Icon": "images/iot-brightness",
+      "Name": "IoT — Brillo",
+      "States": [{ "Image": "images/iot-brightness", "TitleAlignment": "top", "FontSize": "10" }],
+      "Controllers": ["Knob"],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Girá para ajustar el brillo; apretá para volver al ritmo",
+      "UUID": "com.knupwns.audioknob.iot.brightness",
+      "PropertyInspectorPath": "iotbrightness.html"
+    },
+    {
+      "Icon": "images/iot-rhythm",
+      "Name": "IoT — Luces",
+      "States": [{ "Image": "images/iot-rhythm", "TitleAlignment": "top", "FontSize": "10" }],
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Ritmo, A dormir, Cálido/Frío o Todo off",
+      "UUID": "com.knupwns.audioknob.iot.lights",
+      "PropertyInspectorPath": "iotlights.html"
+    },
+    {
       "Icon": "images/action",
       "Name": "Audio Output Knob",
       "States": [
