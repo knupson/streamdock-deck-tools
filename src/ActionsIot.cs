@@ -55,7 +55,7 @@ namespace StreamDeckAudio
 
         // El estado lo dice el color del ícono; el texto va siempre en la misma tinta.
         protected static readonly Color OnTint = ColorTranslator.FromHtml("#FFB54D");
-        protected static readonly Color OffTint = ColorTranslator.FromHtml("#4A5057");
+        protected static readonly Color OffTint = Color.Empty; // cromado original: claro sobre negro
         protected const string NoData = "Sin señal";
 
         // "pc.norte" -> "PC Norte"; "Todas", "PC" y "Cama" quedan como están.
@@ -140,21 +140,6 @@ namespace StreamDeckAudio
             return colors;
         }
 
-        // Nombre por tono, para que también los colores propios del menú tengan nombre.
-        internal static string ColorName(Color color)
-        {
-            if (color.GetSaturation() < 0.2f) return "Blanco";
-            float hue = color.GetHue();
-            if (hue < 15 || hue >= 345) return "Rojo";
-            if (hue < 40) return "Naranja";
-            if (hue < 65) return "Amarillo";
-            if (hue < 160) return "Verde";
-            if (hue < 200) return "Celeste";
-            if (hue < 250) return "Azul";
-            if (hue < 290) return "Violeta";
-            return "Rosa";
-        }
-
         private List<Color> Colors(string context)
         {
             List<Color> colors = ParseColors(Str(context, "colors", DefaultColors));
@@ -207,7 +192,7 @@ namespace StreamDeckAudio
                         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                         g.FillEllipse(brush, 2, 2, 60, 60);
                     }
-                    image = KeyImage.Launcher(swatch, ColorName(color), OnKnob(context));
+                    image = KeyImage.Launcher(swatch, null, OnKnob(context));
                 }
                 _previews[key] = image;
             }
