@@ -58,7 +58,8 @@ Invoke-Csc -Out (Join-Path $plugin 'DeckTools.exe') -Target 'winexe' `
                       'src\ActionsRemote.cs', 'src\ActionsRustDesk.cs',
                       'src\ActionsSeparator.cs', 'src\ActionsMedia.cs',
                       'src\DiscordRpc.cs', 'src\DiscordAuth.cs', 'src\DiscordService.cs',
-                      'src\ActionsDiscord.cs') `
+                      'src\ActionsDiscord.cs', 'src\Wiz.cs', 'src\Tuya.cs',
+                      'src\IotConfig.cs', 'src\IotHub.cs', 'src\ActionsIot.cs') `
            -Refs (@('System.Web.Extensions.dll', 'System.Drawing.dll', 'System.Security.dll') + $winrt)
 
 # Blackout overlay, started by the plugin as a separate process because it needs
@@ -82,6 +83,12 @@ Invoke-Csc -Out (Join-Path $bin 'DiscordTests.exe') `
                       'src\DiscordAuth.cs', 'test\Assert.cs', 'test\DiscordTests.cs') `
            -Refs @('System.Web.Extensions.dll', 'System.Security.dll')
 
+# Tests IoT offline; no acceden a equipos salvo con --live explícito.
+Invoke-Csc -Out (Join-Path $bin 'IotTests.exe') `
+           -Sources @('src\Json.cs', 'src\Wiz.cs', 'src\IotConfig.cs', 'src\Tuya.cs', 'src\IotHub.cs',
+                      'test\Assert.cs', 'test\IotTests.cs') `
+           -Refs @('System.Web.Extensions.dll')
+
 # Companion de consola para el backend de Discord.
 Invoke-Csc -Out (Join-Path $bin 'DiscordProbe.exe') `
            -Sources @('src\AudioCore.cs', 'src\Json.cs', 'src\DiscordRpc.cs',
@@ -93,9 +100,16 @@ $playniteSdk = Join-Path $env:LOCALAPPDATA 'Playnite\Playnite.SDK.dll'
 if (Test-Path $playniteSdk) {
     $playniteOut = Join-Path $root 'playnite\DeckToolsSync'
     New-Item -ItemType Directory -Force $playniteOut | Out-Null
-    Invoke-Csc -Out (Join-Path $playniteOut 'DeckToolsPlaynite.dll') -Target 'library' -Platform 'anycpu' `
-               -Sources @('src\PlayniteSync.cs') `
-               -Refs @($playniteSdk, 'System.Drawing.dll')
+    # Only when the source changed: csc is not deterministic, so a needless
+    # rebuild yields a "new" DLL and the installer restarts Playnite for it.
+    $playniteDll = Join-Path $playniteOut 'DeckToolsPlaynite.dll'
+    $playniteSrcFile = Join-Path $root 'src\PlayniteSync.cs'
+    if (-not (Test-Path $playniteDll) -or
+        (Get-Item $playniteSrcFile).LastWriteTimeUtc -gt (Get-Item $playniteDll).LastWriteTimeUtc) {
+        Invoke-Csc -Out $playniteDll -Target 'library' -Platform 'anycpu' `
+                   -Sources @('src\PlayniteSync.cs') `
+                   -Refs @($playniteSdk, 'System.Drawing.dll')
+    }
     Copy-Item (Join-Path $root 'playnite\extension.yaml') (Join-Path $playniteOut 'extension.yaml') -Force
 }
 

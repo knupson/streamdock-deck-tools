@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Luces</title>
+  <link rel="stylesheet" href="pi.css" />
+</head>
+<body>
+  <div class="row">
+    <div class="label">Función</div>
+    <div class="value">
+      <select id="function">
+        <option value="rhythm">Ritmo</option>
+        <option value="bedtime">A dormir</option>
+        <option value="temp">Cálido/Frío</option>
+        <option value="alloff">Todo off</option>
+      </select>
+    </div>
+  </div>
+  <p class="hint"><b>Ritmo</b> y <b>Cálido/Frío</b> actúan sobre lo elegido.
+    <b>A dormir</b> actúa sobre todas las luces. <b>Todo off</b> apaga todas las luces,
+    ambos enchufes y el purificador; Isaura queda como está.</p>
+  <script src="pi.js"></script>
+  <script>
+    const functionSelect = document.getElementById('function');
+    functionSelect.addEventListener('change', function (event) { PI.set('function', event.target.value); });
+    PI.ready(function (settings) { functionSelect.value = settings.function || 'rhythm'; });
+  </script>
+</body>
+</html>

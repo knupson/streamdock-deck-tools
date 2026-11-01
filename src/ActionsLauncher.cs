@@ -30,7 +30,9 @@ namespace StreamDeckAudio
         public override void WillAppear(string context, Dictionary<string, object> settings, string controller)
         {
             base.WillAppear(context, settings, controller);
-            _selected[context] = Math.Max(0, Int(context, "index", 0));
+            // Every appearance starts on the most-played item; the saved index
+            // points into an order that shifts as launch counts change.
+            _selected[context] = 0;
             Render(context);
         }
 
@@ -70,6 +72,12 @@ namespace StreamDeckAudio
                 Host.ShowAlert(context);
                 return;
             }
+
+            // The launch may have moved the item up the list: keep the wheel on it.
+            items = Items(context, true);
+            int moved = items.FindIndex(i => string.Equals(i.Path, item.Path, StringComparison.OrdinalIgnoreCase));
+            if (moved >= 0) _selected[context] = moved;
+            Render(context);
 
             // Remember where the wheel was left, so it survives a restart.
             Dictionary<string, object> settings = Settings(context);
@@ -162,7 +170,10 @@ namespace StreamDeckAudio
                 DateTime.UtcNow - listedAt < ListingTtl)
                 return _listing[resolved];
 
-            List<Shortcut> items = Shortcuts.List(resolved);
+            // Most launched first; the listing is already by name, and OrderBy is
+            // stable, so ties keep that order.
+            List<Shortcut> items = Shortcuts.List(resolved)
+                .OrderByDescending(item => LaunchCounts.Get(item.Path)).ToList();
             _listing[resolved] = items;
             _listedAt[resolved] = DateTime.UtcNow;
             return items;

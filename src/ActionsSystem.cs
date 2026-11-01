@@ -130,6 +130,31 @@ namespace StreamDeckAudio
         private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wparam, IntPtr lparam);
 
         private Process _overlay;
+        private static Process _lights;
+
+        // Present while a blackout is on, so a plugin restart can finish it.
+        // Holds "muted" when the speakers were already muted before it began.
+        private static readonly string Marker = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), @"DeckTools\blackout.active");
+
+        public BlackoutAction()
+        {
+            try
+            {
+                Process orphan = Process.GetProcessesByName("Blackout").FirstOrDefault();
+                if (orphan != null)
+                {
+                    _overlay = orphan;
+                    Log.Write("blackout: adopted running overlay");
+                }
+                else if (File.Exists(Marker))
+                {
+                    Log.Write("blackout: overlay gone after restart, restoring");
+                    Restore();
+                }
+            }
+            catch (Exception ex) { Log.Write("blackout: startup check failed: " + ex.Message); }
+        }
 
         public override string Uuid { get { return "com.knupwns.audioknob.blackout"; } }
 
@@ -152,7 +177,7 @@ namespace StreamDeckAudio
             if (Active())
             {
                 Stop();
-                Lights("on");
+                Restore();
             }
             else
             {
@@ -168,7 +193,7 @@ namespace StreamDeckAudio
                 {
                     _overlay = Process.Start(new ProcessStartInfo(exe) { UseShellExecute = false });
                     Log.Write("blackout: overlay started");
-                    Lights("off");
+                    Begin();
                 }
                 catch (Exception ex)
                 {
@@ -184,15 +209,60 @@ namespace StreamDeckAudio
             if (_overlay == null || !_overlay.HasExited) return;
 
             _overlay = null; // dismissed from the keyboard or mouse
-            Lights("on");
+            Restore();
             RenderAll();
+        }
+
+        private static void Begin()
+        {
+            // "unknown" when the prior state could not be read: Restore then
+            // leaves the mute alone instead of guessing it was off.
+            string prior = "unknown";
+            try
+            {
+                prior = EndpointVolume.GetMute() ? "muted" : "unmuted";
+                EndpointVolume.SetMute(true);
+            }
+            catch (Exception ex) { Log.Write("blackout: mute failed: " + ex.Message); }
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Marker));
+                File.WriteAllText(Marker, prior);
+            }
+            catch (Exception ex) { Log.Write("blackout: marker write failed: " + ex.Message); }
+            Lights("off");
+        }
+
+        private static void Restore()
+        {
+            string state = string.Empty;
+            try { if (File.Exists(Marker)) state = File.ReadAllText(Marker).Trim(); }
+            catch (Exception) { }
+            if (state != "muted" && state != "unknown")
+            {
+                try { EndpointVolume.SetMute(false); }
+                catch (Exception ex) { Log.Write("blackout: unmute failed: " + ex.Message); }
+            }
+            try { File.Delete(Marker); }
+            catch (Exception) { }
+            Lights("on");
         }
 
         // RGB, case panel and deck backlight go dark with the overlay and come
         // back with it. NightLights.py does the work in its own process so a slow
         // device never blocks the plugin thread; it logs to nightlights.log.
+        // A run still going is cut first: the last order always wins.
         private static void Lights(string action)
         {
+            try
+            {
+                if (_lights != null && !_lights.HasExited)
+                {
+                    _lights.Kill();
+                    Log.Write("blackout: previous lights run cut");
+                }
+            }
+            catch (Exception) { }
             try
             {
                 string script = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "NightLights.py");
@@ -203,7 +273,7 @@ namespace StreamDeckAudio
                     Log.Write("blackout: lights skipped, missing " + (File.Exists(script) ? pythonw : script));
                     return;
                 }
-                Process.Start(new ProcessStartInfo(pythonw, "-I \"" + script + "\" " + action)
+                _lights = Process.Start(new ProcessStartInfo(pythonw, "-I \"" + script + "\" " + action)
                 {
                     UseShellExecute = false,
                     CreateNoWindow = true

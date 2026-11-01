@@ -170,8 +170,13 @@ namespace StreamDeckAudio
             // one, and -T so a key that turns out not to be restricted cannot open
             // an interactive shell this would then sit inside until the timeout.
             arguments.Append("-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new ");
+            // A stale name is looked up by its host key; the alias keeps ssh
+            // checking that key against the name's known_hosts entry.
+            string target = HostFinder.Locate(host, port);
+            if (!string.Equals(target, host, StringComparison.OrdinalIgnoreCase))
+                arguments.Append("-o HostKeyAlias=").Append(host).Append(' ');
             arguments.Append("-p ").Append(port.ToString(CultureInfo.InvariantCulture)).Append(" -T ");
-            arguments.Append(string.IsNullOrEmpty(user) ? host : user + "@" + host);
+            arguments.Append(string.IsNullOrEmpty(user) ? target : user + "@" + target);
             arguments.Append(' ').Append(RemoteScript);
 
             var info = new ProcessStartInfo("ssh.exe", arguments.ToString())

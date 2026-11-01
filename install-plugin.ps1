@@ -355,7 +355,21 @@ if (Test-Path $packSrc) {
 }
 
 # Playnite extension for bidirectional D:\Juegos <-> Playnite Installed sync.
-if (Test-Path (Join-Path $playniteSrc 'DeckToolsPlaynite.dll')) {
+# Playnite is only touched when the extension actually changed, and only
+# reopened if it was already running: reinstalling the deck plugin must not
+# pop Playnite open.
+function Get-FolderHash([string]$Path) {
+    if (-not (Test-Path $Path)) { return '' }
+    $files = Get-ChildItem $Path -Recurse -File | Sort-Object FullName
+    # .NET directly: Get-FileHash is missing in some hosts (seen from Git Bash).
+    $md5 = [Security.Cryptography.MD5]::Create()
+    ($files | ForEach-Object {
+        $_.FullName.Substring($Path.Length) + '=' + [BitConverter]::ToString($md5.ComputeHash([IO.File]::ReadAllBytes($_.FullName)))
+    }) -join ';'
+}
+$playniteChanged = (Get-FolderHash $playniteSrc) -ne (Get-FolderHash $playniteDst)
+if (-not $playniteChanged) { Write-Output 'Playnite extension unchanged: Playnite left alone' }
+if ($playniteChanged -and (Test-Path (Join-Path $playniteSrc 'DeckToolsPlaynite.dll'))) {
     $playniteRunning = Get-Process -Name 'Playnite.DesktopApp' -ErrorAction SilentlyContinue
     if ($playniteRunning) {
         Write-Output 'stopping Playnite.DesktopApp...'
@@ -371,7 +385,7 @@ if (Test-Path (Join-Path $playniteSrc 'DeckToolsPlaynite.dll')) {
     Copy-Item (Join-Path $playniteSrc '*') $playniteDst -Recurse -Force
     Write-Output "installed Playnite extension: $playniteDst"
 
-    if (($playniteRunning -or $Restart) -and (Test-Path $playniteExe)) {
+    if ($playniteRunning -and (Test-Path $playniteExe)) {
         Write-Output 'starting Playnite.DesktopApp...'
         $playnitePid = Start-OnDefaultDesktop -FilePath $playniteExe
         Write-Output "  running Playnite.DesktopApp on Default desktop (pid $playnitePid)"

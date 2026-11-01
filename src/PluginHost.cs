@@ -53,6 +53,7 @@ namespace StreamDeckAudio
         // from the host, not from the manifest: an action offered for both can be
         // on either.
         private readonly Dictionary<string, bool> _onKnob = new Dictionary<string, bool>(StringComparer.Ordinal);
+        private readonly Dictionary<string, long> _keyDown = new Dictionary<string, long>(StringComparer.Ordinal);
 
         public abstract string Uuid { get; }
 
@@ -81,6 +82,7 @@ namespace StreamDeckAudio
         {
             Contexts.Remove(context);
             _onKnob.Remove(context);
+            _keyDown.Remove(context);
         }
 
         /// <summary>Assumed placement when the host does not say which it is.</summary>
@@ -100,6 +102,25 @@ namespace StreamDeckAudio
 
         public virtual void Rotate(string context, int ticks) { }
         public virtual void Press(string context) { }
+        protected virtual bool HandlesLongPress { get { return false; } }
+        public virtual void LongPress(string context) { }
+
+        public void KeyDown(string context)
+        {
+            if (!HandlesLongPress) { Press(context); return; }
+            if (!_keyDown.ContainsKey(context))
+                _keyDown[context] = System.Diagnostics.Stopwatch.GetTimestamp();
+        }
+
+        public virtual void Release(string context)
+        {
+            long started;
+            if (!_keyDown.TryGetValue(context, out started)) return;
+            _keyDown.Remove(context);
+            if ((System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0
+                / System.Diagnostics.Stopwatch.Frequency >= 500) LongPress(context);
+            else Press(context);
+        }
         public virtual void PropertyInspectorAppeared(string context) { }
         public virtual void FromPropertyInspector(string context, Dictionary<string, object> payload) { }
         public virtual void Tick() { }
@@ -142,7 +163,7 @@ namespace StreamDeckAudio
         private static readonly HashSet<string> ActionScoped = new HashSet<string>(StringComparer.Ordinal)
         {
             "willAppear", "willDisappear", "didReceiveSettings", "dialRotate", "dialPress",
-            "dialDown", "keyDown", "touchTap", "propertyInspectorDidAppear", "sendToPlugin"
+            "dialDown", "keyDown", "keyUp", "touchTap", "propertyInspectorDidAppear", "sendToPlugin"
         };
 
         private static ClientWebSocket _socket;
@@ -180,6 +201,13 @@ namespace StreamDeckAudio
                 Register(new MediaPlayerAction());
                 Register(new DiscordDeafenAction());
                 Register(new DiscordScreenShareAction());
+                Register(new IotSelectorAction());
+                Register(new IotPaletteAction());
+                Register(new IotBrightnessAction());
+                Register(new IotLightsAction());
+                Register(new IotPlugAction());
+                Register(new IotPurifierAction());
+                Register(new IotVacuumAction());
 
                 Connect(port, uuid, registerEvent);
                 StartTicker();
@@ -425,14 +453,19 @@ namespace StreamDeckAudio
                     break;
 
                 // Which of these the host sends depends on its SDK version, so
-                // all of them are accepted; releases are ignored.
+                // all of them are accepted. Only keys opt into long presses.
                 case "dialPress":
                     if (Json.Bool(payload, "pressed", true)) action.Press(context);
                     break;
                 case "dialDown":
-                case "keyDown":
                 case "touchTap":
                     action.Press(context);
+                    break;
+                case "keyDown":
+                    action.KeyDown(context);
+                    break;
+                case "keyUp":
+                    action.Release(context);
                     break;
 
                 case "propertyInspectorDidAppear":

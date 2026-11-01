@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Brillo de luces</title>
+  <link rel="stylesheet" href="pi.css" />
+</head>
+<body>
+  <div class="row">
+    <div class="label">Paso (%)</div>
+    <div class="value"><input id="step" type="number" min="1" max="25" step="1" /></div>
+  </div>
+  <p class="hint"><b>Girá</b> para ajustar el brillo de lo elegido entre 10 y 100 %.
+    <b>Apretá</b> para volver al ritmo.</p>
+  <script src="pi.js"></script>
+  <script>
+    const setStep = PI.number('step', 'step', 5, 1, 25);
+    PI.ready(function (settings) { setStep(settings.step); });
+  </script>
+</body>
+</html>

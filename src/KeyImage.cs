@@ -80,7 +80,25 @@ namespace StreamDeckAudio
         /// </summary>
         public static string Glyph(string baseName, string top, string bottom, bool knob, Color bottomColor)
         {
-            string key = "g\n" + baseName + "\n" + top + "\n" + bottom + "\n" + knob + "\n" + bottomColor.ToArgb();
+            return Compose(baseName, top, bottom, knob, bottomColor, Color.Empty, false);
+        }
+
+        /// <summary>
+        /// The glyph recoloured to say its state without a word: the chrome's
+        /// shading is kept and multiplied by the tint (a warm tone for "on", a
+        /// dark grey for "off"). Text stays in the one ink. A small dot in the
+        /// corner flags something that wants attention.
+        /// </summary>
+        public static string Lit(string baseName, string top, string bottom, bool knob, Color tint, bool badge)
+        {
+            return Compose(baseName, top, bottom, knob, Ink, tint, badge);
+        }
+
+        private static string Compose(string baseName, string top, string bottom, bool knob, Color bottomColor,
+                                      Color tint, bool badge)
+        {
+            string key = "g\n" + baseName + "\n" + top + "\n" + bottom + "\n" + knob + "\n" + bottomColor.ToArgb()
+                + "\n" + tint.ToArgb() + "\n" + badge;
             string cached;
             if (Cache.TryGetValue(key, out cached)) return cached;
 
@@ -101,7 +119,15 @@ namespace StreamDeckAudio
                                 // The artwork itself sits between y=48 and y=96, so
                                 // it clears the strip a knob hides without moving;
                                 // only the value underneath has to come up.
-                                g.DrawImage(art, 0, 0, Size, Size);
+                                if (tint.IsEmpty)
+                                    g.DrawImage(art, 0, 0, Size, Size);
+                                else
+                                    using (ImageAttributes attributes = TintAttributes(tint))
+                                        g.DrawImage(art, new Rectangle(0, 0, Size, Size), 0, 0, art.Width, art.Height,
+                                                    GraphicsUnit.Pixel, attributes);
+                                if (badge)
+                                    using (var dot = new SolidBrush(Warn))
+                                        g.FillEllipse(dot, Size - 30, 50, 16, 16);
 
                                 int floor = BottomFor(knob);
                                 if (!string.IsNullOrEmpty(top))
@@ -505,6 +531,26 @@ namespace StreamDeckAudio
 
                 g.FillPath(brush, path);
             }
+        }
+
+        // Luminance of the chrome times the tint, alpha untouched. The chrome
+        // tops out below white, so the gain lifts its highlights back to the
+        // full tint instead of a muddy version of it.
+        private static ImageAttributes TintAttributes(Color tint)
+        {
+            const float Gain = 1.25f;
+            float r = tint.R / 255f * Gain, g = tint.G / 255f * Gain, b = tint.B / 255f * Gain;
+            var matrix = new ColorMatrix(new float[][]
+            {
+                new float[] { 0.299f * r, 0.299f * g, 0.299f * b, 0, 0 },
+                new float[] { 0.587f * r, 0.587f * g, 0.587f * b, 0, 0 },
+                new float[] { 0.114f * r, 0.114f * g, 0.114f * b, 0, 0 },
+                new float[] { 0, 0, 0, 1, 0 },
+                new float[] { 0, 0, 0, 0, 1 },
+            });
+            var attributes = new ImageAttributes();
+            attributes.SetColorMatrix(matrix);
+            return attributes;
         }
 
         private static Bitmap LoadBase(string baseName)
