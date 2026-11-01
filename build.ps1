@@ -82,6 +82,12 @@ Invoke-Csc -Out (Join-Path $bin 'DiscordTests.exe') `
                       'src\DiscordAuth.cs', 'test\Assert.cs', 'test\DiscordTests.cs') `
            -Refs @('System.Web.Extensions.dll', 'System.Security.dll')
 
+# Tests IoT offline; no acceden a equipos salvo con --live explícito.
+Invoke-Csc -Out (Join-Path $bin 'IotTests.exe') `
+           -Sources @('src\Json.cs', 'src\Wiz.cs', 'src\IotConfig.cs',
+                      'test\Assert.cs', 'test\IotTests.cs') `
+           -Refs @('System.Web.Extensions.dll')
+
 # Companion de consola para el backend de Discord.
 Invoke-Csc -Out (Join-Path $bin 'DiscordProbe.exe') `
            -Sources @('src\AudioCore.cs', 'src\Json.cs', 'src\DiscordRpc.cs',
