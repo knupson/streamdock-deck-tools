@@ -361,7 +361,11 @@ if (Test-Path $packSrc) {
 function Get-FolderHash([string]$Path) {
     if (-not (Test-Path $Path)) { return '' }
     $files = Get-ChildItem $Path -Recurse -File | Sort-Object FullName
-    ($files | ForEach-Object { $_.FullName.Substring($Path.Length) + '=' + (Get-FileHash $_.FullName -Algorithm MD5).Hash }) -join ';'
+    # .NET directly: Get-FileHash is missing in some hosts (seen from Git Bash).
+    $md5 = [Security.Cryptography.MD5]::Create()
+    ($files | ForEach-Object {
+        $_.FullName.Substring($Path.Length) + '=' + [BitConverter]::ToString($md5.ComputeHash([IO.File]::ReadAllBytes($_.FullName)))
+    }) -join ';'
 }
 $playniteChanged = (Get-FolderHash $playniteSrc) -ne (Get-FolderHash $playniteDst)
 if (-not $playniteChanged) { Write-Output 'Playnite extension unchanged: Playnite left alone' }
