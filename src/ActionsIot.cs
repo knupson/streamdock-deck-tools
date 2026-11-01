@@ -53,6 +53,25 @@ namespace StreamDeckAudio
             if (settings != null) SettingsChanged(context, settings);
         }
 
+        // El estado lo dice el color del ícono; el texto va siempre en la misma tinta.
+        protected static readonly Color OnTint = ColorTranslator.FromHtml("#FFB54D");
+        protected static readonly Color OffTint = ColorTranslator.FromHtml("#4A5057");
+        protected const string NoData = "Sin señal";
+
+        // "pc.norte" -> "PC Norte"; "Todas", "PC" y "Cama" quedan como están.
+        protected static string Pretty(string selection)
+        {
+            int dot = selection.IndexOf('.');
+            if (dot < 0) return selection;
+            return Capital(selection.Substring(0, dot)) + " " + Capital(selection.Substring(dot + 1));
+        }
+
+        private static string Capital(string word)
+        {
+            if (word == "pc") return "PC";
+            return word.Length == 0 ? word : char.ToUpperInvariant(word[0]) + word.Substring(1);
+        }
+
         protected WizPilot FirstPilot()
         {
             IList<IotLight> lights = Hub.Resolve(Hub.Selected);
@@ -77,9 +96,6 @@ namespace StreamDeckAudio
         {
             if (ticks == 0) return;
             Hub.MoveSelection(ticks);
-            string selected = Hub.Selected;
-            IList<IotLight> lights = Hub.Resolve(selected);
-            if (lights.Count == 1 && selected == lights[0].FullName) Hub.Identify(lights[0]);
         }
 
         public override void Press(string context) { Hub.Toggle(); }
@@ -96,9 +112,11 @@ namespace StreamDeckAudio
                 manual |= Hub.IsManual(light);
                 rhythm &= p != null && p.InRhythm;
             }
-            string status = first == null ? "sin datos" : (first.On ? "ON" : "OFF")
-                + " " + (manual ? "manual" : rhythm ? "ritmo" : "escena");
-            Show(context, KeyImage.Glyph("iot-selector", Hub.Selected, status, OnKnob(context)));
+            string status = first == null ? NoData
+                : !first.On ? (lights.Count > 1 ? "Apagadas" : "Apagada")
+                : manual ? "Manual" : rhythm ? "Ritmo" : "Escena";
+            Show(context, KeyImage.Lit("iot-selector", Pretty(Hub.Selected), status, OnKnob(context),
+                                       first != null && first.On ? OnTint : OffTint, false));
         }
     }
 
@@ -120,6 +138,21 @@ namespace StreamDeckAudio
                     colors.Add(Color.FromArgb((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255));
             }
             return colors;
+        }
+
+        // Nombre por tono, para que también los colores propios del menú tengan nombre.
+        internal static string ColorName(Color color)
+        {
+            if (color.GetSaturation() < 0.2f) return "Blanco";
+            float hue = color.GetHue();
+            if (hue < 15 || hue >= 345) return "Rojo";
+            if (hue < 40) return "Naranja";
+            if (hue < 65) return "Amarillo";
+            if (hue < 160) return "Verde";
+            if (hue < 200) return "Celeste";
+            if (hue < 250) return "Azul";
+            if (hue < 290) return "Violeta";
+            return "Rosa";
         }
 
         private List<Color> Colors(string context)
@@ -161,8 +194,7 @@ namespace StreamDeckAudio
         {
             List<Color> colors = Colors(context);
             Color color = colors[Index(context, colors.Count)];
-            string hex = "#" + color.R.ToString("x2") + color.G.ToString("x2") + color.B.ToString("x2");
-            string key = hex + OnKnob(context);
+            string key = color.ToArgb() + "\n" + OnKnob(context);
             string image;
             if (!_previews.TryGetValue(key, out image))
             {
@@ -175,7 +207,7 @@ namespace StreamDeckAudio
                         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                         g.FillEllipse(brush, 2, 2, 60, 60);
                     }
-                    image = KeyImage.Launcher(swatch, hex, OnKnob(context));
+                    image = KeyImage.Launcher(swatch, ColorName(color), OnKnob(context));
                 }
                 _previews[key] = image;
             }
@@ -196,8 +228,9 @@ namespace StreamDeckAudio
         protected override void Render(string context)
         {
             WizPilot p = FirstPilot();
-            string value = p == null || !p.Dimming.HasValue ? "sin datos" : p.Dimming.Value + "%";
-            Show(context, KeyImage.Glyph("iot-brightness", "Brillo", value, OnKnob(context)));
+            string value = p == null || !p.Dimming.HasValue ? NoData : p.Dimming.Value + " %";
+            Show(context, KeyImage.Lit("iot-brightness", "Brillo", value, OnKnob(context),
+                                       p != null && p.On ? OnTint : OffTint, false));
         }
     }
 
@@ -211,13 +244,16 @@ namespace StreamDeckAudio
         {
             string alias = Alias(context);
             Dictionary<string, object> status = Hub.TuyaStatus(alias);
-            string value = status == null || !status.ContainsKey("1") ? "sin datos" : Json.Bool(status, "1", false) ? "ON" : "OFF";
-            Show(context, KeyImage.Glyph("iot-plug", alias == "noche" ? "Noche" : "Vestidor", value, OnKnob(context)));
+            bool known = status != null && status.ContainsKey("1"), on = known && Json.Bool(status, "1", false);
+            string value = !known ? NoData : on ? "Prendido" : "Apagado";
+            Show(context, KeyImage.Lit("iot-plug", alias == "noche" ? "Noche" : "Vestidor", value, OnKnob(context),
+                                       on ? OnTint : OffTint, false));
         }
     }
 
     internal sealed class IotPurifierAction : IotAction
     {
+        private static readonly Color AirTint = ColorTranslator.FromHtml("#7FD3DC");
         public override string Uuid { get { return "com.knupwns.audioknob.iot.purifier"; } }
         protected override bool DefaultsToKnob { get { return false; } }
         protected override bool HandlesLongPress { get { return true; } }
@@ -226,13 +262,22 @@ namespace StreamDeckAudio
         protected override void Render(string context)
         {
             Dictionary<string, object> status = Hub.TuyaStatus("purificador");
-            string speed = Json.Str(status, "4") ?? "sin datos";
-            string title = status == null ? "Purificador" : (Json.Bool(status, "1", false) ? "ON " : "OFF ") + speed;
+            bool on = status != null && Json.Bool(status, "1", false);
+            string value;
+            if (status == null) value = NoData;
+            else if (!on) value = "Apagado";
+            else switch (Json.Str(status, "4"))
+            {
+                case "sleep": value = "Nocturno"; break;
+                case "low": value = "Baja"; break;
+                case "mid": value = "Media"; break;
+                case "high": value = "Alta"; break;
+                default: value = "Auto"; break;
+            }
+            // El punto avisa que toca cambiar el filtro (≤ 15 %).
             int filter = Json.Int(status, "5", -1);
-            string value = filter < 0 ? "sin datos" : "filtro " + filter + "%";
-            Show(context, filter >= 0 && filter <= 15
-                ? KeyImage.Glyph("iot-purifier", title, value, OnKnob(context), KeyImage.Warn)
-                : KeyImage.Glyph("iot-purifier", title, value, OnKnob(context)));
+            Show(context, KeyImage.Lit("iot-purifier", "Purificador", value, OnKnob(context),
+                                       on ? AirTint : OffTint, filter >= 0 && filter <= 15));
         }
     }
 
@@ -251,25 +296,31 @@ namespace StreamDeckAudio
         {
             Dictionary<string, object> status = Hub.TuyaStatus("aspiradora");
             string state;
+            Color tint = OffTint;
             switch (Json.Str(status, "5"))
             {
-                case "standby": case "charging": case "charge_done": case "sleep": state = "en base"; break;
-                case "cleaning": case "zone_clean": case "part_clean": case "goto_pos": state = "limpiando"; break;
-                case "paused": state = "en pausa"; break;
-                case "goto_charge": state = "volviendo"; break;
-                default: state = status == null ? "sin datos" : "desconocido"; break;
+                case "standby": case "charging": case "charge_done": case "sleep": state = "En base"; break;
+                case "cleaning": case "zone_clean": case "part_clean": case "goto_pos":
+                    state = "Limpiando"; tint = KeyImage.Good; break;
+                case "paused": state = "En pausa"; tint = KeyImage.Warn; break;
+                case "goto_charge": state = "Volviendo"; tint = KeyImage.Good; break;
+                default: state = status == null ? NoData : "Desconocido"; break;
             }
             int fault = Json.Int(status, "28", 0), previous;
             if (fault != 0 && (!_faults.TryGetValue(context, out previous) || previous != fault)) Host.ShowAlert(context);
             _faults[context] = fault;
             int battery = Json.Int(status, "8", -1);
-            string value = fault != 0 ? "falla" : battery < 0 ? "sin datos" : "batería " + battery + "%";
-            Show(context, KeyImage.Glyph("iot-vacuum", "Isaura: " + state, value, OnKnob(context)));
+            if (fault != 0) { state = "Falla"; tint = KeyImage.Bad; }
+            string title = battery >= 0 ? "Isaura " + battery + " %" : "Isaura";
+            Show(context, KeyImage.Lit("iot-vacuum", title, state, OnKnob(context), tint, false));
         }
     }
 
     internal sealed class IotLightsAction : IotAction
     {
+        private static readonly Color NeutralTint = ColorTranslator.FromHtml("#F4E7D2");
+        private static readonly Color ColdTint = ColorTranslator.FromHtml("#9CCBFF");
+        private static readonly Color NightTint = ColorTranslator.FromHtml("#A99BFF");
         public override string Uuid { get { return "com.knupwns.audioknob.iot.lights"; } }
         protected override bool DefaultsToKnob { get { return false; } }
         public override void Press(string context)
@@ -287,15 +338,19 @@ namespace StreamDeckAudio
         {
             string function = Str(context, "function", "rhythm");
             string glyph, title, value;
+            Color tint;
             if (function == "temp")
             {
                 WizPilot p = FirstPilot();
-                glyph = "iot-temp"; title = "Cálido/Frío";
-                value = p == null || !p.Temp.HasValue ? "sin datos" : p.Temp.Value + " K";
+                glyph = "iot-temp"; title = "Tono";
+                if (p == null || !p.Temp.HasValue) { value = NoData; tint = OffTint; }
+                else if (p.Temp.Value <= 3200) { value = "Cálido"; tint = OnTint; }
+                else if (p.Temp.Value <= 5000) { value = "Neutro"; tint = NeutralTint; }
+                else { value = "Frío"; tint = ColdTint; }
             }
             else if (function == "alloff")
             {
-                glyph = "iot-off"; title = "Todo off"; value = string.Empty;
+                glyph = "iot-off"; title = "Apagar todo"; value = string.Empty; tint = KeyImage.Bad;
             }
             else
             {
@@ -309,9 +364,10 @@ namespace StreamDeckAudio
                 }
                 glyph = bedtime ? "iot-bedtime" : "iot-rhythm";
                 title = bedtime ? "A dormir" : "Ritmo";
-                value = active ? "ACTIVO" : string.Empty;
+                value = active ? "Activo" : string.Empty;
+                tint = !active ? OffTint : bedtime ? NightTint : OnTint;
             }
-            Show(context, KeyImage.Glyph(glyph, title, value, OnKnob(context)));
+            Show(context, KeyImage.Lit(glyph, title, value, OnKnob(context), tint, false));
         }
     }
 }
