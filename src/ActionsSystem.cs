@@ -215,17 +215,19 @@ namespace StreamDeckAudio
 
         private static void Begin()
         {
-            bool wasMuted = false;
+            // "unknown" when the prior state could not be read: Restore then
+            // leaves the mute alone instead of guessing it was off.
+            string prior = "unknown";
             try
             {
-                wasMuted = EndpointVolume.GetMute();
+                prior = EndpointVolume.GetMute() ? "muted" : "unmuted";
                 EndpointVolume.SetMute(true);
             }
             catch (Exception ex) { Log.Write("blackout: mute failed: " + ex.Message); }
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(Marker));
-                File.WriteAllText(Marker, wasMuted ? "muted" : "unmuted");
+                File.WriteAllText(Marker, prior);
             }
             catch (Exception ex) { Log.Write("blackout: marker write failed: " + ex.Message); }
             Lights("off");
@@ -236,7 +238,7 @@ namespace StreamDeckAudio
             string state = string.Empty;
             try { if (File.Exists(Marker)) state = File.ReadAllText(Marker).Trim(); }
             catch (Exception) { }
-            if (state != "muted")
+            if (state != "muted" && state != "unknown")
             {
                 try { EndpointVolume.SetMute(false); }
                 catch (Exception ex) { Log.Write("blackout: unmute failed: " + ex.Message); }
