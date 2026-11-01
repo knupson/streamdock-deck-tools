@@ -178,7 +178,7 @@ namespace StreamDeckAudio
     /// </summary>
     public static class HostFinder
     {
-        private const int ReachMs = 800, ScanConnectMs = 300;
+        private const int ReachMs = 800, ScanConnectMs = 1500;
         private static readonly TimeSpan RescanEvery = TimeSpan.FromMinutes(2);
         private static readonly object Gate = new object();
         private static readonly Dictionary<string, string> Found =
@@ -291,11 +291,34 @@ namespace StreamDeckAudio
                 }
             }
 
-            var open = new List<string>();
-            Parallel.ForEach(candidates.Distinct(), new ParallelOptions { MaxDegreeOfParallelism = 64 }, candidate =>
+            // Every connect is started at once and they all share one deadline:
+            // Wi-Fi hosts can take a second to answer, and waiting for them one
+            // thread at a time made the sweep both slow and short-sighted.
+            var attempts = new List<KeyValuePair<string, TcpClient>>();
+            var pending = new List<IAsyncResult>();
+            foreach (string candidate in candidates.Distinct())
             {
-                if (Reachable(candidate, port, ScanConnectMs)) lock (open) open.Add(candidate);
-            });
+                var client = new TcpClient();
+                try
+                {
+                    pending.Add(client.BeginConnect(candidate, port, null, null));
+                    attempts.Add(new KeyValuePair<string, TcpClient>(candidate, client));
+                }
+                catch (Exception) { client.Close(); }
+            }
+
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(ScanConnectMs);
+            var open = new List<string>();
+            for (int i = 0; i < attempts.Count; i++)
+            {
+                int left = (int)Math.Max(0, (deadline - DateTime.UtcNow).TotalMilliseconds);
+                if (pending[i].IsCompleted || pending[i].AsyncWaitHandle.WaitOne(left))
+                {
+                    try { attempts[i].Value.EndConnect(pending[i]); open.Add(attempts[i].Key); }
+                    catch (Exception) { /* refused or unreachable */ }
+                }
+            }
+            foreach (KeyValuePair<string, TcpClient> attempt in attempts) attempt.Value.Close();
             return open;
         }
 
