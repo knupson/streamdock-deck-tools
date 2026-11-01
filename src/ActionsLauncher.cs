@@ -71,6 +71,12 @@ namespace StreamDeckAudio
                 return;
             }
 
+            // The launch may have moved the item up the list: keep the wheel on it.
+            items = Items(context, true);
+            int moved = items.FindIndex(i => string.Equals(i.Path, item.Path, StringComparison.OrdinalIgnoreCase));
+            if (moved >= 0) _selected[context] = moved;
+            Render(context);
+
             // Remember where the wheel was left, so it survives a restart.
             Dictionary<string, object> settings = Settings(context);
             settings["index"] = Index(context, items.Count);
@@ -162,7 +168,10 @@ namespace StreamDeckAudio
                 DateTime.UtcNow - listedAt < ListingTtl)
                 return _listing[resolved];
 
-            List<Shortcut> items = Shortcuts.List(resolved);
+            // Most launched first; the listing is already by name, and OrderBy is
+            // stable, so ties keep that order.
+            List<Shortcut> items = Shortcuts.List(resolved)
+                .OrderByDescending(item => LaunchCounts.Get(item.Path)).ToList();
             _listing[resolved] = items;
             _listedAt[resolved] = DateTime.UtcNow;
             return items;

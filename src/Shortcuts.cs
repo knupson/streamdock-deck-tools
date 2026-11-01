@@ -167,6 +167,7 @@ namespace StreamDeckAudio
                 ClearPlayniteSafeStartFlag();
                 Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
                 Log.Write("launched " + path);
+                LaunchCounts.Add(path);
                 return true;
             }
             catch (Exception ex)
@@ -394,6 +395,105 @@ namespace StreamDeckAudio
             {
                 if (handle != IntPtr.Zero) DeleteObject(handle);
             }
+        }
+    }
+
+    /// <summary>
+    /// How many times each item was launched, so the wheel can offer the usual
+    /// ones first. Kept in launch-counts.txt ("count<TAB>path") next to the log;
+    /// the first time it is seeded from the "launched" lines the log already has.
+    /// </summary>
+    public static class LaunchCounts
+    {
+        private static readonly object Gate = new object();
+        private static Dictionary<string, int> _counts;
+
+        private static string Folder
+        {
+            get
+            {
+                return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                    "StreamDeckAudio");
+            }
+        }
+
+        private static string FilePath { get { return Path.Combine(Folder, "launch-counts.txt"); } }
+
+        public static int Get(string path)
+        {
+            lock (Gate)
+            {
+                int count;
+                return Load().TryGetValue(Key(path), out count) ? count : 0;
+            }
+        }
+
+        public static void Add(string path)
+        {
+            lock (Gate)
+            {
+                Dictionary<string, int> counts = Load();
+                int count;
+                counts.TryGetValue(Key(path), out count);
+                counts[Key(path)] = count + 1;
+                Save(counts);
+            }
+        }
+
+        // Without the extension: a shortcut that changes from .lnk to .url (a
+        // Playnite resync does that) is still the same game and keeps its count.
+        private static string Key(string path)
+        {
+            try { return Path.Combine(Path.GetDirectoryName(path), Path.GetFileNameWithoutExtension(path)); }
+            catch (Exception) { return path; }
+        }
+
+        private static Dictionary<string, int> Load()
+        {
+            if (_counts != null) return _counts;
+            _counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (File.Exists(FilePath))
+                {
+                    foreach (string line in File.ReadAllLines(FilePath))
+                    {
+                        int tab = line.IndexOf('	'), count;
+                        if (tab > 0 && int.TryParse(line.Substring(0, tab), out count))
+                            _counts[line.Substring(tab + 1)] = count;
+                    }
+                }
+                else
+                {
+                    string log = Path.Combine(Folder, "audioknob.log");
+                    if (File.Exists(log))
+                    {
+                        const string Marker = "  launched ";
+                        foreach (string line in File.ReadAllLines(log))
+                        {
+                            int at = line.IndexOf(Marker, StringComparison.Ordinal);
+                            if (at < 0) continue;
+                            string path = Key(line.Substring(at + Marker.Length).Trim());
+                            int count;
+                            _counts.TryGetValue(path, out count);
+                            _counts[path] = count + 1;
+                        }
+                    }
+                    Save(_counts);
+                }
+            }
+            catch (Exception ex) { Log.Write("launch counts: load failed: " + ex.Message); }
+            return _counts;
+        }
+
+        private static void Save(Dictionary<string, int> counts)
+        {
+            try
+            {
+                Directory.CreateDirectory(Folder);
+                File.WriteAllLines(FilePath, counts.Select(kv => kv.Value + "	" + kv.Key).ToArray());
+            }
+            catch (Exception ex) { Log.Write("launch counts: save failed: " + ex.Message); }
         }
     }
 }
