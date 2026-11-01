@@ -147,8 +147,14 @@ namespace StreamDeckAudio
         }
     }
 
+    internal interface ITuyaLink
+    {
+        Dictionary<string, object> Status(IotTuyaDevice d);
+        bool Set(IotTuyaDevice d, IDictionary<string, object> dps);
+    }
+
     // Operaciones sincrónicas: el hub debe llamarlas desde un hilo de fondo.
-    internal sealed class TuyaClient
+    internal sealed class TuyaClient : ITuyaLink
     {
         private const int Port = 6668;
         private const int TimeoutMs = 3000;

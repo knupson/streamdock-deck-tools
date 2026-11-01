@@ -218,6 +218,297 @@ namespace StreamDeckAudio
                 TuyaProtocol.ParseResponse(TuyaProtocol.Frame(1, 8, payload), TuyaKey));
         }
 
+        private sealed class Sent
+        {
+            public string Target;
+            public Dictionary<string, object> Values;
+            public DateTime Time;
+        }
+
+        private sealed class FakeWiz : IWizLink
+        {
+            public readonly Dictionary<string, WizPilot> Pilots = new Dictionary<string, WizPilot>();
+            public readonly List<Sent> Sent = new List<Sent>();
+            public Func<DateTime> Now;
+            public int Gets;
+            public string Broken;
+            public WizPilot Get(string ip)
+            {
+                Gets++;
+                if (ip == Broken) throw new IOException("Equipo inventado desconectado");
+                WizPilot p = Pilots[ip];
+                return new WizPilot { On = p.On, SceneId = p.SceneId, Temp = p.Temp, Dimming = p.Dimming, SchdPsetId = p.SchdPsetId };
+            }
+            public bool Set(string ip, IDictionary<string, object> values)
+            {
+                Sent.Add(new Sent { Target = ip, Values = new Dictionary<string, object>(values), Time = Now() });
+                if (ip == Broken) throw new IOException("Equipo inventado desconectado");
+                WizPilot p = Pilots[ip];
+                object v;
+                if (values.TryGetValue("state", out v)) { p.On = (bool)v; if (p.On) { p.SceneId = 0; p.SchdPsetId = 5; } }
+                if (values.TryGetValue("sceneId", out v)) { p.SceneId = (int)v; p.SchdPsetId = null; }
+                if (values.TryGetValue("temp", out v)) p.Temp = (int)v;
+                if (values.TryGetValue("dimming", out v)) p.Dimming = (int)v;
+                return true;
+            }
+        }
+        private sealed class FakeTuya : ITuyaLink
+        {
+            public readonly List<Sent> Sent = new List<Sent>();
+            public int Gets;
+            public string Broken;
+            public Dictionary<string, object> Status(IotTuyaDevice d)
+            {
+                Gets++;
+                if (d.Alias == Broken) throw new IOException("Equipo inventado sin respuesta");
+                return new Dictionary<string, object> { { "1", false } };
+            }
+            public bool Set(IotTuyaDevice d, IDictionary<string, object> dps)
+            {
+                Sent.Add(new Sent { Target = d.Alias, Values = new Dictionary<string, object>(dps) });
+                if (d.Alias == Broken) throw new IOException("Equipo inventado sin respuesta");
+                return true;
+            }
+        }
+        private sealed class HubFixture : IDisposable
+        {
+            public DateTime Now = new DateTime(2030, 1, 1);
+            public readonly IotConfig Config = new IotConfig();
+            public readonly FakeWiz Wiz = new FakeWiz();
+            public readonly FakeTuya Tuya = new FakeTuya();
+            public readonly IotHub Hub;
+            public HubFixture()
+            {
+                Config.Lights.Add(new IotLight { Group = "pc", Name = "a", Ip = "192.0.2.1" });
+                Config.Lights.Add(new IotLight { Group = "cama", Name = "b", Ip = "192.0.2.2" });
+                foreach (IotLight l in Config.Lights)
+                    Wiz.Pilots[l.Ip] = new WizPilot { On = true, Temp = 4200, Dimming = 50, SchdPsetId = 5 };
+                foreach (string alias in new string[] { "noche", "vestidor", "purificador", "aspiradora" })
+                    Config.Tuya[alias] = new IotTuyaDevice { Alias = alias };
+                Wiz.Now = delegate { return Now; };
+                Hub = new IotHub(Config, Wiz, Tuya, delegate { return Now; }, false);
+            }
+            public void Seed()
+            {
+                Hub.SetVisible(this, true);
+                Hub.Flush();
+                Hub.SetVisible(this, false);
+            }
+            public void Dispose() { Hub.Dispose(); }
+        }
+
+        private static void Selection_CyclesAndWraps()
+        {
+            using (var f = new HubFixture())
+            {
+                Check.Equal("orden de objetivos", "Todas,PC,Cama,pc.a,cama.b", string.Join(",", f.Hub.Targets));
+                foreach (string selected in new string[] { "PC", "Cama", "pc.a", "cama.b", "Todas" })
+                {
+                    f.Hub.MoveSelection(1);
+                    Check.Equal("Selection_CyclesAndWraps", selected, f.Hub.Selected);
+                }
+                f.Hub.MoveSelection(-1);
+                Check.Equal("giro negativo", "cama.b", f.Hub.Selected);
+                f.Hub.MoveSelection(int.MinValue);
+                Check.True("giro grande válido", f.Hub.Targets.Contains(f.Hub.Selected));
+                Check.Equal("resolver PC", f.Config.Lights[0], f.Hub.Resolve("PC")[0]);
+                Check.Equal("resolver Cama", f.Config.Lights[1], f.Hub.Resolve("Cama")[0]);
+                Check.Equal("resolver individual", 1, f.Hub.Resolve("pc.a").Count);
+                Check.Equal("objetivo desconocido", 0, f.Hub.Resolve("inexistente").Count);
+            }
+        }
+        private static void Selection_ResetsAfter10s()
+        {
+            using (var f = new HubFixture())
+            {
+                f.Hub.MoveSelection(1);
+                f.Hub.Tick(f.Now.AddSeconds(9));
+                Check.Equal("Selection_ResetsAfter10s: antes", "PC", f.Hub.Selected);
+                f.Hub.Tick(f.Now.AddSeconds(10));
+                Check.Equal("Selection_ResetsAfter10s: límite", "Todas", f.Hub.Selected);
+                f.Hub.MoveSelection(1);
+                f.Now = f.Now.AddSeconds(8);
+                f.Hub.TouchSelection();
+                f.Hub.Tick(f.Now.AddSeconds(9));
+                Check.Equal("TouchSelection renueva el plazo", "PC", f.Hub.Selected);
+            }
+        }
+        private static void Resume_SendsBareStateAndClearsManual()
+        {
+            using (var f = new HubFixture())
+            {
+                f.Seed();
+                f.Hub.MoveSelection(1);
+                f.Hub.ApplyColor(1, 2, 3);
+                Check.True("color marca manual", f.Hub.IsManual(f.Config.Lights[0]));
+                f.Hub.AddBrightness(5);
+                f.Hub.Resume();
+                Check.Equal("acciones sin I/O", 0, f.Wiz.Sent.Count);
+                f.Hub.Flush();
+                Dictionary<string, object> last = f.Wiz.Sent[f.Wiz.Sent.Count - 1].Values;
+                Check.Equal("Resume_SendsBareStateAndClearsManual", "{\"state\":true}", new JavaScriptSerializer().Serialize(last));
+                Check.Equal("Resume limpia manual", false, f.Hub.IsManual(f.Config.Lights[0]));
+                Check.Equal("Resume cancela brillo pendiente", 2, f.Wiz.Sent.Count);
+                f.Hub.AddBrightness(-5);
+                f.Hub.ResumeAll();
+                f.Hub.Flush();
+                foreach (IotLight l in f.Config.Lights) Check.Equal("ResumeAll limpia manual", false, f.Hub.IsManual(l));
+            }
+        }
+        private static void Bedtime_AlwaysAllLights()
+        {
+            using (var f = new HubFixture())
+            {
+                f.Hub.MoveSelection(1);
+                f.Hub.Bedtime();
+                Check.Equal("Bedtime sin I/O", 0, f.Wiz.Gets + f.Wiz.Sent.Count);
+                f.Hub.Flush();
+                Check.Equal("Bedtime_AlwaysAllLights", 2, f.Wiz.Sent.Count);
+                foreach (Sent s in f.Wiz.Sent) Check.Equal("escena dormir", 10, (int)s.Values["sceneId"]);
+            }
+        }
+        private static void AllOff_SkipsVacuum()
+        {
+            using (var f = new HubFixture())
+            {
+                f.Hub.MoveSelection(1);
+                f.Hub.AllOff();
+                Check.Equal("AllOff sin I/O", 0, f.Tuya.Gets + f.Tuya.Sent.Count);
+                f.Hub.Flush();
+                Check.Equal("AllOff luces", 2, f.Wiz.Sent.Count);
+                Check.Equal("AllOff_SkipsVacuum", 3, f.Tuya.Sent.Count);
+                for (int i = 0; i < 3; i++)
+                {
+                    Check.Equal("alias apagado", new string[] { "noche", "vestidor", "purificador" }[i], f.Tuya.Sent[i].Target);
+                    Check.Equal("DP1 apagado", false, (bool)f.Tuya.Sent[i].Values["1"]);
+                }
+            }
+        }
+        private static void CycleTemperature_FromCurrent()
+        {
+            using (var f = new HubFixture())
+            {
+                f.Seed();
+                f.Hub.MoveSelection(1);
+                foreach (int temp in new int[] { 6500, 2700, 4000, 6500 })
+                {
+                    f.Hub.CycleTemperature();
+                    f.Hub.Flush();
+                    Check.Equal("CycleTemperature_FromCurrent", temp, (int)f.Wiz.Sent[f.Wiz.Sent.Count - 1].Values["temp"]);
+                }
+                Check.True("temperatura marca manual", f.Hub.IsManual(f.Config.Lights[0]));
+            }
+        }
+        private static void Brightness_CoalescesBurst()
+        {
+            using (var f = new HubFixture())
+            {
+                f.Seed();
+                for (int i = 0; i < 12; i++)
+                {
+                    f.Hub.AddBrightness(5);
+                    f.Hub.Flush();
+                    f.Now = f.Now.AddMilliseconds(5);
+                }
+                Check.Equal("un paquete por lámpara antes de 100 ms", 2, f.Wiz.Sent.Count);
+                f.Now = f.Now.AddMilliseconds(40);
+                f.Hub.Pump(f.Now);
+                Check.Equal("Brightness_CoalescesBurst: dos por lámpara", 4, f.Wiz.Sent.Count);
+                for (int i = 2; i < 4; i++)
+                {
+                    Check.Equal("último brillo", 100, (int)f.Wiz.Sent[i].Values["dimming"]);
+                    Check.True("intervalo mínimo", f.Wiz.Sent[i].Time - f.Wiz.Sent[i - 2].Time >= TimeSpan.FromMilliseconds(100));
+                }
+                f.Hub.AddBrightness(int.MinValue);
+                f.Now = f.Now.AddMilliseconds(100);
+                f.Hub.Flush();
+                Check.Equal("mínimo de brillo", 10, (int)f.Wiz.Sent[4].Values["dimming"]);
+                f.Hub.AddBrightness(10);
+                f.Hub.Resume();
+                f.Hub.Flush();
+                f.Now = f.Now.AddSeconds(1);
+                f.Hub.Flush();
+                Check.Equal("no reaparece brillo después de Resume", "state", new List<string>(f.Wiz.Sent[f.Wiz.Sent.Count - 1].Values.Keys)[0]);
+            }
+        }
+        private static void Polling_VisibilityCacheAndFailures()
+        {
+            using (var f = new HubFixture())
+            {
+                int changes = 0;
+                f.Hub.Changed += delegate { changes++; };
+                f.Hub.Flush();
+                Check.Equal("oculto no sondea", 0, f.Wiz.Gets);
+                object second = new object();
+                f.Hub.SetVisible(f, true);
+                Check.Equal("SetVisible sin I/O", 0, f.Wiz.Gets);
+                f.Hub.SetVisible(second, true);
+                f.Hub.Flush();
+                f.Hub.Pilot(f.Config.Lights[0]).Dimming = 1;
+                Check.Equal<int?>("caché WiZ defensiva", 50, f.Hub.Pilot(f.Config.Lights[0]).Dimming);
+                f.Hub.TuyaStatus("noche")["1"] = true;
+                Check.Equal("caché Tuya defensiva", false, (bool)f.Hub.TuyaStatus("noche")["1"]);
+                f.Hub.SetVisible(f, false);
+                f.Now = f.Now.AddMilliseconds(2999);
+                f.Hub.Flush();
+                Check.Equal("no sondea antes de 3 s", 2, f.Wiz.Gets);
+                f.Wiz.Broken = f.Config.Lights[0].Ip;
+                f.Tuya.Broken = "noche";
+                f.Now = f.Now.AddMilliseconds(1);
+                f.Hub.Flush();
+                Check.Equal("otro dueño mantiene sondeo", 4, f.Wiz.Gets);
+                Check.Equal<WizPilot>("luz sin respuesta", null, f.Hub.Pilot(f.Config.Lights[0]));
+                Check.True("otra luz sigue disponible", f.Hub.Pilot(f.Config.Lights[1]) != null);
+                Check.Equal<Dictionary<string, object>>("Tuya sin respuesta", null, f.Hub.TuyaStatus("noche"));
+                Check.True("otro Tuya sigue disponible", f.Hub.TuyaStatus("vestidor") != null);
+                f.Hub.AllOff();
+                f.Hub.Flush();
+                Check.Equal("fallo de envío no corta otras luces", 2, f.Wiz.Sent.Count);
+                Check.Equal("fallo Tuya no corta otros envíos", 3, f.Tuya.Sent.Count);
+                f.Hub.SetVisible(second, false);
+                f.Now = f.Now.AddSeconds(3);
+                int gets = f.Wiz.Gets;
+                f.Hub.Flush();
+                Check.Equal("último dueño detiene sondeo", gets, f.Wiz.Gets);
+                Check.True("Changed avisa cambios", changes > 0);
+            }
+        }
+        private static void Identify_RestoresWithoutManual()
+        {
+            using (var f = new HubFixture())
+            {
+                f.Seed();
+                f.Hub.Identify(f.Config.Lights[0]);
+                Check.Equal("Identify sin I/O", 0, f.Wiz.Sent.Count);
+                f.Now = f.Now.AddSeconds(1);
+                f.Hub.Flush();
+                Check.Equal("Identify baja brillo", 10, (int)f.Wiz.Sent[0].Values["dimming"]);
+                Check.Equal("Identify demora la restauración desde el envío real", 1, f.Wiz.Sent.Count);
+                f.Now = f.Now.AddMilliseconds(199);
+                f.Hub.Flush();
+                Check.Equal("Identify espera sin dormir", 1, f.Wiz.Sent.Count);
+                f.Now = f.Now.AddMilliseconds(1);
+                f.Hub.Flush();
+                Check.Equal("Identify restaura", 50, (int)f.Wiz.Sent[1].Values["dimming"]);
+                Check.Equal("Identify no marca manual", false, f.Hub.IsManual(f.Config.Lights[0]));
+                f.Hub.Identify(f.Config.Lights[0]);
+                f.Hub.Flush();
+                f.Hub.ResumeAll();
+                f.Hub.Flush();
+                int count = f.Wiz.Sent.Count;
+                f.Now = f.Now.AddMilliseconds(200);
+                f.Hub.Flush();
+                Check.Equal("Resume cancela restauración de Identify", count, f.Wiz.Sent.Count);
+                f.Wiz.Sent.Clear();
+                f.Hub.Toggle();
+                f.Hub.Toggle();
+                f.Hub.Flush();
+                Check.Equal("Toggle conserva ambos toques", 4, f.Wiz.Sent.Count);
+                Check.Equal("Toggle primero apaga", false, (bool)f.Wiz.Sent[0].Values["state"]);
+                Check.Equal("Toggle luego prende", true, (bool)f.Wiz.Sent[2].Values["state"]);
+            }
+        }
+
         private static int Live()
         {
             IotConfig cfg = IotConfig.Load(IotConfig.DefaultFolder);
@@ -261,6 +552,15 @@ namespace StreamDeckAudio
                 Decrypt_WrongKeyReturnsNull();
                 Parse_EmptyAndVersionHeader();
                 Parse_RejectsInvalidFrames();
+                Selection_CyclesAndWraps();
+                Selection_ResetsAfter10s();
+                Resume_SendsBareStateAndClearsManual();
+                Bedtime_AlwaysAllLights();
+                AllOff_SkipsVacuum();
+                CycleTemperature_FromCurrent();
+                Brightness_CoalescesBurst();
+                Polling_VisibilityCacheAndFailures();
+                Identify_RestoresWithoutManual();
                 return Check.Report();
             }
             catch (Exception ex) { Console.WriteLine("FALLA: " + ex.Message); return 1; }

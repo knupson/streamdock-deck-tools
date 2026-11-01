@@ -61,8 +61,14 @@ namespace StreamDeckAudio
         public static string ParseMac(string json) { return Json.Str(Result(json), "mac"); }
     }
 
+    internal interface IWizLink
+    {
+        WizPilot Get(string ip);
+        bool Set(string ip, IDictionary<string, object> p);
+    }
+
     // Operaciones sincrónicas: el hub debe llamarlas desde un hilo de fondo.
-    internal sealed class WizClient
+    internal sealed class WizClient : IWizLink
     {
         private const int Port = 38899;
         private const int TimeoutMs = 600;
