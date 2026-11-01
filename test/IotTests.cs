@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Web.Script.Serialization;
 
 namespace StreamDeckAudio
@@ -106,6 +107,117 @@ namespace StreamDeckAudio
             Check.Equal("luz accesible conserva IP", cfg.Lights[0].Ip, client.EnsureIp(cfg, cfg.Lights[0], delegate { return time; }));
         }
 
+        private const string TuyaKey = "0123456789abcdef";
+        private const string TuyaId = "testdev0001";
+        private const long TuyaTime = 1700000000;
+
+        private static string Hex(byte[] bytes)
+        {
+            return BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
+        }
+
+        private static void Frame_MatchesTinytuyaQuery()
+        {
+            // tinytuya: gwId, devId, uid, t, sin espacios; sin encabezado 3.3.
+            const string expected = "000055aa000000010000000a000000687b615f96a69a699ee142581f0a3270551ea4cf801d00a865c6c28f7502ef0f24a07f7b749454059ae41950f691f80c65fbc3243210ea82b4130215a124df1a397a8db6f7195e48867341e7cb291a942203000aeb4ff51d29188f82e4a162a1f6c7bc47460000aa55";
+            Check.Equal("Frame_MatchesTinytuyaQuery", expected,
+                Hex(TuyaProtocol.BuildQuery(TuyaId, TuyaKey, 1, TuyaTime)));
+        }
+
+        private static void Frame_MatchesTinytuyaControl()
+        {
+            // tinytuya: devId, uid, t, dps, sin espacios; encabezado 3.3 + 12 ceros.
+            const string expected = "000055aa000000020000000700000067332e330000000000000000000000000d6545c9afde6f8747f491b90fc111ffd21df37d6fd70b00c1e77a5377e3b2dbe6fdc57f49d1a4329ce695e80f17f52cf9825e8a7c974132c83dccc1368b0f44b98d177f076695bd7ecd6cfb887fe9ad569fafe80000aa55";
+            Check.Equal("Frame_MatchesTinytuyaControl", expected,
+                Hex(TuyaProtocol.BuildControl(TuyaId, TuyaKey, 2,
+                    new Dictionary<string, object> { { "1", true } }, TuyaTime)));
+        }
+
+        private static void Roundtrip_Decrypt()
+        {
+            // Incluye bloques exactos, padding completo y UTF-8.
+            foreach (string text in new string[] { "", "1234567890123456", "{\"dps\":{\"1\":true,\"4\":\"sueño\"}}" })
+            {
+                byte[] plain = Encoding.UTF8.GetBytes(text);
+                Check.Equal("Roundtrip_Decrypt: " + text.Length, Hex(plain),
+                    Hex(TuyaProtocol.Decrypt(TuyaProtocol.Encrypt(plain, TuyaKey), TuyaKey)));
+            }
+        }
+
+        private static void Decrypt_WrongKeyReturnsNull()
+        {
+            byte[] cipher = TuyaProtocol.Encrypt(Encoding.UTF8.GetBytes("{\"dps\":{\"1\":true}}"), TuyaKey);
+            Check.Equal<byte[]>("Decrypt_WrongKeyReturnsNull", null,
+                TuyaProtocol.Decrypt(cipher, "fedcba9876543210"));
+            Check.Equal<byte[]>("clave de largo inválido", null, TuyaProtocol.Decrypt(cipher, "corta"));
+            Check.Equal<byte[]>("clave no ASCII", null, TuyaProtocol.Decrypt(cipher, "0123456789abcdeñ"));
+            Check.Equal<byte[]>("cifrado truncado", null, TuyaProtocol.Decrypt(new byte[15], TuyaKey));
+            Check.Equal<byte[]>("cifrado ausente", null, TuyaProtocol.Decrypt(null, TuyaKey));
+        }
+
+        private static byte[] TuyaResponse(string json, bool versionHeader, int returnCode)
+        {
+            byte[] cipher = TuyaProtocol.Encrypt(Encoding.UTF8.GetBytes(json), TuyaKey);
+            var payload = new byte[4 + (versionHeader ? 15 : 0) + cipher.Length];
+            payload[3] = (byte)returnCode;
+            if (versionHeader) Buffer.BlockCopy(Encoding.ASCII.GetBytes("3.3"), 0, payload, 4, 3);
+            Buffer.BlockCopy(cipher, 0, payload, versionHeader ? 19 : 4, cipher.Length);
+            return TuyaProtocol.Frame(3, 8, payload);
+        }
+
+        private static void Parse_EmptyAndVersionHeader()
+        {
+            Check.Equal<Dictionary<string, object>>("Parse_EmptyAndVersionHeader: ACK vacío", null,
+                TuyaProtocol.ParseResponse(TuyaProtocol.Frame(1, TuyaProtocol.CmdDpQuery, new byte[4]), TuyaKey));
+            Check.Equal<Dictionary<string, object>>("frame sin payload", null,
+                TuyaProtocol.ParseResponse(TuyaProtocol.Frame(1, TuyaProtocol.CmdControl, new byte[0]), TuyaKey));
+            foreach (bool version in new bool[] { false, true })
+            {
+                Dictionary<string, object> dps = TuyaProtocol.ParseResponse(
+                    TuyaResponse("{\"devId\":\"testdev0001\",\"dps\":{\"1\":true,\"4\":\"sleep\",\"8\":75}}", version, 0), TuyaKey);
+                Check.True("DP1, encabezado " + version, Json.Bool(dps, "1", false));
+                Check.Equal("DP4, encabezado " + version, "sleep", Json.Str(dps, "4"));
+                Check.Equal("DP8, encabezado " + version, 75, Json.Int(dps, "8", 0));
+            }
+        }
+
+        private static void Parse_RejectsInvalidFrames()
+        {
+            byte[] valid = TuyaResponse("{\"dps\":{\"1\":true}}", true, 0);
+            Check.Equal<Dictionary<string, object>>("respuesta con otra clave", null,
+                TuyaProtocol.ParseResponse(valid, "fedcba9876543210"));
+            // Cada campo estructural y el cifrado quedan cubiertos por la validación.
+            foreach (int offset in new int[] { 0, 12, 20, valid.Length - 8, valid.Length - 1 })
+            {
+                byte[] broken = (byte[])valid.Clone();
+                broken[offset] ^= 1;
+                Check.Equal<Dictionary<string, object>>("frame corrupto en " + offset, null,
+                    TuyaProtocol.ParseResponse(broken, TuyaKey));
+            }
+            for (int length = 0; length < valid.Length; length++)
+            {
+                var truncated = new byte[length];
+                Buffer.BlockCopy(valid, 0, truncated, 0, length);
+                if (TuyaProtocol.ParseResponse(truncated, TuyaKey) != null)
+                    throw new Exception("Se aceptó un frame Tuya truncado.");
+            }
+            Check.True("todos los truncamientos devuelven null", true);
+            Check.Equal<Dictionary<string, object>>("respuesta nula", null, TuyaProtocol.ParseResponse(null, TuyaKey));
+            Check.Equal<Dictionary<string, object>>("return code de error", null,
+                TuyaProtocol.ParseResponse(TuyaResponse("{\"dps\":{\"1\":true}}", false, 1), TuyaKey));
+            foreach (string json in new string[] { "{", "[]", "{}", "{\"dps\":[]}", "{\"error\":\"falló\",\"dps\":{\"1\":true}}" })
+                Check.Equal<Dictionary<string, object>>("JSON sin dps válidos: " + json, null,
+                    TuyaProtocol.ParseResponse(TuyaResponse(json, false, 0), TuyaKey));
+            var payload = new byte[19];
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes("3.3"), 0, payload, 4, 3);
+            Check.Equal<Dictionary<string, object>>("encabezado sin cifrado", null,
+                TuyaProtocol.ParseResponse(TuyaProtocol.Frame(1, 8, payload), TuyaKey));
+            payload = new byte[35];
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes("3.4"), 0, payload, 4, 3);
+            Check.Equal<Dictionary<string, object>>("versión no soportada", null,
+                TuyaProtocol.ParseResponse(TuyaProtocol.Frame(1, 8, payload), TuyaKey));
+        }
+
         private static int Live()
         {
             IotConfig cfg = IotConfig.Load(IotConfig.DefaultFolder);
@@ -116,6 +228,13 @@ namespace StreamDeckAudio
                 WizPilot p = client.Get(light.Ip);
                 if (p == null) { Console.WriteLine(light.FullName + " sin respuesta"); failed = true; }
                 else Console.WriteLine(light.FullName + " " + p.On + " " + p.Dimming + " " + p.InRhythm);
+            }
+            var tuya = new TuyaClient();
+            foreach (IotTuyaDevice device in cfg.Tuya.Values)
+            {
+                Dictionary<string, object> dps = tuya.Status(device);
+                if (dps == null) { Console.WriteLine(device.Alias + " sin respuesta"); failed = true; }
+                else Console.WriteLine(device.Alias + " " + new JavaScriptSerializer().Serialize(dps));
             }
             return failed ? 1 : 0;
         }
@@ -136,6 +255,12 @@ namespace StreamDeckAudio
                 Config_LoadsGroupsAndTuya(folder);
                 Config_SaveKeepsUnknownKeys(folder);
                 Discovery_NotRepeatedWithinCooldown(folder);
+                Frame_MatchesTinytuyaQuery();
+                Frame_MatchesTinytuyaControl();
+                Roundtrip_Decrypt();
+                Decrypt_WrongKeyReturnsNull();
+                Parse_EmptyAndVersionHeader();
+                Parse_RejectsInvalidFrames();
                 return Check.Report();
             }
             catch (Exception ex) { Console.WriteLine("FALLA: " + ex.Message); return 1; }
