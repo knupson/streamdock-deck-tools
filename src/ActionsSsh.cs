@@ -142,7 +142,7 @@ namespace StreamDeckAudio
             {
                 // The SSH port itself, not ICMP: a machine that pings but has no
                 // sshd is not a machine this key can do anything with.
-                HostState state = HostProbe.Check(host, port, ProbeTimeoutMs);
+                HostState state = HostProbe.Check(HostFinder.Cached(host) ?? host, port, ProbeTimeoutMs);
                 Host.Invoke(delegate
                 {
                     watch.Busy = false;
@@ -227,11 +227,16 @@ namespace StreamDeckAudio
             if (!string.IsNullOrEmpty(user) && !Safe.IsMatch(user)) return null;
 
             int port = Port(context);
-            string target = string.IsNullOrEmpty(user) ? host : user + "@" + host;
+            // When the name went stale and the monitor found the machine by its
+            // host key, dial that address and keep checking the key by name.
+            string found = HostFinder.Cached(host);
+            string address = found ?? host;
+            string target = string.IsNullOrEmpty(user) ? address : user + "@" + address;
 
             // The default port is left off: "ssh pi4" is what a person would type,
             // and it is what shows up in the log.
-            string arguments = (port == DefaultPort ? string.Empty : "-p " + port + " ") + target;
+            string arguments = (found == null ? string.Empty : "-o HostKeyAlias=" + host + " ")
+                + (port == DefaultPort ? string.Empty : "-p " + port + " ") + target;
 
             switch (Str(context, "terminal", "wt"))
             {
