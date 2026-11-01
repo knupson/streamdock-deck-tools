@@ -18,16 +18,12 @@ PYTHON = os.path.join(os.environ.get("LOCALAPPDATA", ""), r"Programs\Python\Pyth
 PANEL_REPO = r"E:\Repositorios\Personal\solarmax-cm-b600l-panel"
 PANEL_PORT = "COM3"
 PANEL_TASK = "PanelVitals"
-RGB_SNAPSHOT = "_pre-blackout"
-RGB_FALLBACK = "Naranja"
+RGB_PROFILE = "Naranja"  # the only colour scheme in use
 DECK_VID, DECK_PID, DECK_USAGE_PAGE = 0x0200, 0x3001, 0xFFA0
 DECK_ON_BRIGHTNESS = 100
 NO_WINDOW = 0x08000000
 
 LOG = os.path.join(os.environ.get("APPDATA", "."), "DeckTools", "nightlights.log")
-# Set once the snapshot holds the real colours; a second "off" while dark must
-# not overwrite it with black.
-SNAPSHOT_TAKEN = os.path.join(os.environ.get("APPDATA", "."), "DeckTools", "rgb-snapshot.taken")
 
 
 def log(msg):
@@ -54,9 +50,6 @@ def rgb_off():
     from openrgb.utils import RGBColor
     c = OpenRGBClient("127.0.0.1", 6742, "decktools-blackout")
     try:
-        if not os.path.exists(SNAPSHOT_TAKEN):
-            c.save_profile(RGB_SNAPSHOT)
-            open(SNAPSHOT_TAKEN, "w").close()
         for d in c.devices:
             modes = [m.name.lower() for m in d.modes]
             if "off" in modes:
@@ -76,9 +69,7 @@ def rgb_on():
     from openrgb.utils import ModeColors
     c = OpenRGBClient("127.0.0.1", 6742, "decktools-blackout")
     try:
-        c.update_profiles()
-        names = [p.name for p in c.profiles]
-        c.load_profile(RGB_SNAPSHOT if RGB_SNAPSHOT in names else RGB_FALLBACK)
+        c.load_profile(RGB_PROFILE)
         # The motherboard's ARGB header (case and CPU coolers) stays dark after
         # the profile restores its Static mode; sending that mode and its
         # colour again wakes it up. The profile applies asynchronously, so the
@@ -91,8 +82,6 @@ def rgb_on():
                 colors = list(mode.colors)
                 d.set_mode(mode.name)
                 d.set_colors(colors)
-        if os.path.exists(SNAPSHOT_TAKEN):
-            os.remove(SNAPSHOT_TAKEN)
     finally:
         c.disconnect()
 
