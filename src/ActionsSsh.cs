@@ -254,7 +254,9 @@ namespace StreamDeckAudio
                     return new Command { File = "cmd.exe", Arguments = "/k ssh " + arguments };
 
                 case "custom":
-                    return Custom(context, host, user, port, target);
+                    // A template has no HostKeyAlias to pin the key, so it only ever gets
+                    // the name, never an address found on the network.
+                    return Custom(context, host, user, port, string.IsNullOrEmpty(user) ? host : user + "@" + host);
 
                 default:
                     return new Command { File = "wt.exe", Arguments = "ssh " + arguments };

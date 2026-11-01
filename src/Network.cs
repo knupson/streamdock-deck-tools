@@ -323,7 +323,16 @@ namespace StreamDeckAudio
                     process.BeginOutputReadLine();
                     string error = process.StandardError.ReadToEnd();
                     if (!process.WaitForExit(6000)) { try { process.Kill(); } catch (Exception) { } return false; }
-                    return error.Contains("Permission denied") && !error.Contains("verification failed");
+                    // Only ssh's own line after a completed key exchange counts. A
+                    // server can disconnect early with any text it likes, but ssh
+                    // prints that as "Received disconnect ..." with control
+                    // characters escaped, so it cannot forge a line that starts
+                    // like this one.
+                    string expected = "probe@" + ip + ": Permission denied (";
+                    if (process.ExitCode != 255) return false;
+                    foreach (string line in error.Split('\n'))
+                        if (line.TrimEnd('\r').StartsWith(expected, StringComparison.Ordinal)) return true;
+                    return false;
                 }
             }
             catch (Exception ex) { Log.Write("remote: host key check failed: " + ex.Message); }
