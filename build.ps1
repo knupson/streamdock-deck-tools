@@ -59,7 +59,7 @@ Invoke-Csc -Out (Join-Path $plugin 'DeckTools.exe') -Target 'winexe' `
                       'src\ActionsSeparator.cs', 'src\ActionsMedia.cs',
                       'src\DiscordRpc.cs', 'src\DiscordAuth.cs', 'src\DiscordService.cs',
                       'src\ActionsDiscord.cs', 'src\Wiz.cs', 'src\Tuya.cs',
-                      'src\IotConfig.cs', 'src\IotHub.cs', 'src\ActionsIot.cs') `
+                      'src\IotConfig.cs', 'src\IotHub.cs', 'src\ActionsIot.cs', 'src\TuyaCloud.cs') `
            -Refs (@('System.Web.Extensions.dll', 'System.Drawing.dll', 'System.Security.dll') + $winrt)
 
 # Blackout overlay, started by the plugin as a separate process because it needs
@@ -84,10 +84,11 @@ Invoke-Csc -Out (Join-Path $bin 'DiscordTests.exe') `
            -Refs @('System.Web.Extensions.dll', 'System.Security.dll')
 
 # Tests IoT offline; no acceden a equipos salvo con --live explícito.
+# Comparten el backend para probar también las acciones reales y sus vistas previas.
+Copy-Item (Join-Path $plugin 'DeckTools.exe') (Join-Path $bin 'DeckTools.exe') -Force
 Invoke-Csc -Out (Join-Path $bin 'IotTests.exe') `
-           -Sources @('src\Json.cs', 'src\Wiz.cs', 'src\IotConfig.cs', 'src\Tuya.cs', 'src\IotHub.cs',
-                      'test\Assert.cs', 'test\IotTests.cs') `
-           -Refs @('System.Web.Extensions.dll')
+           -Sources @('test\Assert.cs', 'test\IotTests.cs') `
+           -Refs @('System.Web.Extensions.dll', 'System.Drawing.dll', (Join-Path $bin 'DeckTools.exe'))
 
 # Companion de consola para el backend de Discord.
 Invoke-Csc -Out (Join-Path $bin 'DiscordProbe.exe') `
@@ -122,6 +123,11 @@ Write-Output 'generating icons:'
             (Join-Path $root 'iconpack\com.knupwns.decktools.sdIconPack') `
             (Join-Path $root 'tools')
 if ($LASTEXITCODE -ne 0) { throw "icon generation failed ($LASTEXITCODE)" }
+
+# Las acciones offline cargan los mismos íconos que el backend de producción.
+$testImages = Join-Path $bin 'images'
+New-Item -ItemType Directory -Force $testImages | Out-Null
+Copy-Item (Join-Path $plugin 'images\iot-*.png') $testImages -Force
 
 # Left behind by versions before the backend was renamed.
 Remove-Item (Join-Path $plugin 'AudioKnob.exe') -Force -ErrorAction SilentlyContinue

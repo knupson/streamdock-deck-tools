@@ -208,6 +208,7 @@ namespace StreamDeckAudio
                 Register(new IotPlugAction());
                 Register(new IotPurifierAction());
                 Register(new IotVacuumAction());
+                Register(new IotAireAction());
 
                 Connect(port, uuid, registerEvent);
                 StartTicker();

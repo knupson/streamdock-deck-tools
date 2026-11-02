@@ -26,6 +26,8 @@ namespace StreamDeckAudio
             public string TuyaAction;
             public bool Identify;
             public int? RestoreBrightness;
+            public string AireAction;
+            public int AireValue;
         }
 
         private static readonly Lazy<IotHub> Instance = new Lazy<IotHub>(delegate
@@ -38,6 +40,14 @@ namespace StreamDeckAudio
         private readonly IotConfig _config;
         private readonly IWizLink _wiz;
         private readonly ITuyaLink _tuya;
+        private readonly ITuyaCloudLink _cloud;
+        private AireState _aire;
+        private DateTime? _lastAirePoll;
+        private bool _aireFailed;
+        private readonly HashSet<object> _aireVisible = new HashSet<object>();
+        private int _selectionVersion;
+        public int SelectionVersion { get { lock (_gate) return _selectionVersion; } }
+        public AireState Aire { get { lock (_gate) return _aire == null ? null : _aire.Copy(); } }
         private readonly Func<DateTime> _now;
         private readonly object _gate = new object(), _pumpGate = new object();
         private readonly Dictionary<IotLight, LightState> _lights = new Dictionary<IotLight, LightState>();
@@ -56,9 +66,13 @@ namespace StreamDeckAudio
 
         // background=false deja toda la ejecución en manos de Pump, sin dormir en tests.
         public IotHub(IotConfig config, IWizLink wiz, ITuyaLink tuya, Func<DateTime> now, bool background)
+            : this(config, wiz, tuya, now, background, new TuyaCloud(config.ApiKey, config.ApiSecret, config.CloudEndpoint)) { }
+
+        public IotHub(IotConfig config, IWizLink wiz, ITuyaLink tuya, Func<DateTime> now, bool background, ITuyaCloudLink cloud)
         {
             if (config == null || wiz == null || tuya == null || now == null) throw new ArgumentNullException();
             _config = config; _wiz = wiz; _tuya = tuya; _now = now;
+            _cloud = cloud;
             _touched = now();
             var targets = new List<string> { "Todas", "PC", "Cama" };
             foreach (IotLight light in config.Lights)
@@ -66,6 +80,7 @@ namespace StreamDeckAudio
                 targets.Add(light.FullName);
                 _lights.Add(light, new LightState());
             }
+            targets.Add("Aire");
             _targets = targets.AsReadOnly();
             if (background) _timer = new Timer(delegate(object ignored) { Pump(_now()); }, null, Timeout.Infinite, Timeout.Infinite);
         }
@@ -89,8 +104,19 @@ namespace StreamDeckAudio
         {
             lock (_gate)
             {
+                int previous = _selection;
                 _selection = (int)(((_selection + (long)ticks) % _targets.Count + _targets.Count) % _targets.Count);
+                if (previous != _selection)
+                {
+                    _selectionVersion++;
+                    if (_targets[_selection] == "Aire")
+                    {
+                        _aireFailed = false;
+                        if (_aire == null) _lastAirePoll = null;
+                    }
+                }
                 _touched = _now();
+                Wake();
             }
             Notify();
         }
@@ -101,7 +127,7 @@ namespace StreamDeckAudio
             bool changed = false;
             lock (_gate)
             {
-                if (_selection != 0 && now - _touched >= TimeSpan.FromSeconds(10)) { _selection = 0; changed = true; }
+                if (_selection != 0 && now - _touched >= TimeSpan.FromSeconds(10)) { _selection = 0; _selectionVersion++; changed = true; }
             }
             if (changed) Notify();
         }
@@ -174,6 +200,7 @@ namespace StreamDeckAudio
         }
         public void Toggle()
         {
+            if (Selected == "Aire") { ToggleAire(); return; }
             lock (_gate)
             {
                 if (_disposed) return;
@@ -259,6 +286,52 @@ namespace StreamDeckAudio
         public void NextPurifierSpeed() { QueueTuya("purificador", "speed"); }
         public void VacuumStep() { QueueTuya("aspiradora", "vacuum"); }
 
+        public void ToggleAire() { QueueAire("toggle", 0); }
+        public void ApplyAireMode(int mode) { QueueAire("mode", Clamp(mode, 0, 4)); }
+        public void ApplyAireTemp(int temp) { QueueAire("temp", Clamp(temp, 16, 30)); }
+        private void QueueAire(string action, int value)
+        {
+            lock (_gate)
+            {
+                if (_disposed || (action != "toggle" && _aire == null)) return;
+                _touched = _now();
+                _queue.Add(new Work { AireAction = action, AireValue = value });
+                Wake();
+            }
+        }
+
+        public void SetAireVisible(object owner, bool visible)
+        {
+            lock (_gate)
+            {
+                if (_disposed) return;
+                if (visible) { if (_aireVisible.Add(owner)) { _lastAirePoll = null; _aireFailed = false; } }
+                else _aireVisible.Remove(owner);
+                Wake();
+            }
+        }
+        private AireState ReadAire()
+        {
+            if (_cloud == null || string.IsNullOrEmpty(_config.InfraredId) || string.IsNullOrEmpty(_config.RemoteId)) return null;
+            try { return _cloud.AcStatus(_config.InfraredId, _config.RemoteId); }
+            catch (Exception) { return null; }
+        }
+        private void ExecuteAire(Work work, DateTime now)
+        {
+            AireState state = Aire;
+            if (state == null && work.AireAction == "toggle") state = ReadAire();
+            bool ok = false;
+            if (state != null)
+            {
+                state.Power = work.AireAction == "toggle" ? 1 - state.Power : 1;
+                if (work.AireAction == "mode") state.Mode = work.AireValue;
+                if (work.AireAction == "temp") state.Temp = work.AireValue;
+                try { ok = _cloud.AcSend(_config.InfraredId, _config.RemoteId, state.Power, state.Mode, state.Temp, state.Wind); }
+                catch (Exception) { }
+            }
+            lock (_gate) { _aire = ok ? state : null; _aireFailed = !ok; _lastAirePoll = now; }
+        }
+
         private static Dictionary<string, object> TuyaCommand(string action, Dictionary<string, object> status)
         {
             if (status == null) return null;
@@ -333,6 +406,7 @@ namespace StreamDeckAudio
         }
         private void Execute(Work work, DateTime now)
         {
+            if (work.AireAction != null) { ExecuteAire(work, now); return; }
             if (work.Light != null)
             {
                 bool ok = false;
@@ -405,6 +479,21 @@ namespace StreamDeckAudio
                     Execute(work, now);
                     changed = true;
                 }
+                bool pollAire;
+                lock (_gate)
+                {
+                    pollAire = !_aireFailed && (_aireVisible.Count != 0 || _targets[_selection] == "Aire")
+                        && (!_lastAirePoll.HasValue || now - _lastAirePoll.Value >= TimeSpan.FromSeconds(60));
+                    if (pollAire) _lastAirePoll = now;
+                }
+                if (pollAire)
+                {
+                    AireState state = ReadAire();
+                    lock (_gate) { _aire = state; _aireFailed = state == null; }
+                    changed = true;
+                }
+                // Mostrar el resultado cloud sin esperar las lecturas de equipos locales.
+                if (changed) { Notify(); changed = false; }
                 bool poll;
                 lock (_gate)
                 {
@@ -430,7 +519,7 @@ namespace StreamDeckAudio
                 }
                 lock (_gate)
                 {
-                    bool pending = _queue.Count != 0 || _visible.Count != 0;
+                    bool pending = _queue.Count != 0 || _visible.Count != 0 || _aireVisible.Count != 0 || _selection != 0;
                     foreach (LightState state in _lights.Values) pending |= state.Brightness.HasValue;
                     if (!pending && _timer != null && !_disposed) _timer.Change(Timeout.Infinite, Timeout.Infinite);
                 }
@@ -445,6 +534,7 @@ namespace StreamDeckAudio
             {
                 _disposed = true;
                 _visible.Clear();
+                _aireVisible.Clear();
                 _queue.Clear();
                 if (_timer != null) _timer.Dispose();
             }

@@ -307,14 +307,14 @@ namespace StreamDeckAudio
         {
             using (var f = new HubFixture())
             {
-                Check.Equal("orden de objetivos", "Todas,PC,Cama,pc.a,cama.b", string.Join(",", f.Hub.Targets));
-                foreach (string selected in new string[] { "PC", "Cama", "pc.a", "cama.b", "Todas" })
+                Check.Equal("orden de objetivos", "Todas,PC,Cama,pc.a,cama.b,Aire", string.Join(",", f.Hub.Targets));
+                foreach (string selected in new string[] { "PC", "Cama", "pc.a", "cama.b", "Aire", "Todas" })
                 {
                     f.Hub.MoveSelection(1);
                     Check.Equal("Selection_CyclesAndWraps", selected, f.Hub.Selected);
                 }
                 f.Hub.MoveSelection(-1);
-                Check.Equal("giro negativo", "cama.b", f.Hub.Selected);
+                Check.Equal("giro negativo", "Aire", f.Hub.Selected);
                 f.Hub.MoveSelection(int.MinValue);
                 Check.True("giro grande válido", f.Hub.Targets.Contains(f.Hub.Selected));
                 Check.Equal("resolver PC", f.Config.Lights[0], f.Hub.Resolve("PC")[0]);
@@ -616,7 +616,238 @@ namespace StreamDeckAudio
                 if (dps == null) { Console.WriteLine(device.Alias + " sin respuesta"); failed = true; }
                 else Console.WriteLine(device.Alias + " " + new JavaScriptSerializer().Serialize(dps));
             }
+            // Sólo lectura: el aire va por la API cloud de Tuya; mandar órdenes lo hace pitar.
+            AireState aire = new TuyaCloud(cfg.ApiKey, cfg.ApiSecret, cfg.CloudEndpoint).AcStatus(cfg.InfraredId, cfg.RemoteId);
+            if (aire == null) { Console.WriteLine("aire sin respuesta"); failed = true; }
+            else Console.WriteLine("aire power=" + aire.Power + " mode=" + aire.Mode + " temp=" + aire.Temp + " wind=" + aire.Wind);
             return failed ? 1 : 0;
+        }
+
+        private sealed class FakeCloud : ITuyaCloudLink
+        {
+            public int Reads;
+            public bool FailRead, FailSend;
+            public AireState State = new AireState { Power = 0, Mode = 0, Temp = 24, Wind = 2 };
+            public readonly List<AireState> Sends = new List<AireState>();
+            public AireState AcStatus(string ir, string remote)
+            { Reads++; return FailRead ? null : State.Copy(); }
+            public bool AcSend(string ir, string remote, int power, int mode, int temp, int wind)
+            {
+                var state = new AireState { Power = power, Mode = mode, Temp = temp, Wind = wind };
+                Sends.Add(state);
+                if (FailSend) return false;
+                State = state.Copy(); return true;
+            }
+        }
+
+        private sealed class QuietHost : IHost
+        {
+            public void SetImage(string context, string image) { }
+            public void SetTitle(string context, string title) { }
+            public void SetState(string context, int state) { }
+            public void ShowAlert(string context) { }
+            public void SendToPropertyInspector(string context, string action, string payload) { }
+            public void SetSettings(string context, Dictionary<string, object> settings) { }
+            public void Invoke(Action action) { action(); }
+        }
+
+        private static void Cloud_Signing()
+        {
+            // Vector inventado: fórmula escrita sin usar helpers de producción.
+            const string key = "cliente-inventado", secret = "secreto-inventado", time = "1700000000000";
+            const string emptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+            const string url = "/v1.0/token?grant_type=1";
+            string stringToSign = "GET\n" + emptyHash + "\n\n" + url;
+            using (var hmac = new System.Security.Cryptography.HMACSHA256(Encoding.UTF8.GetBytes(secret)))
+            {
+                string expected = BitConverter.ToString(hmac.ComputeHash(Encoding.UTF8.GetBytes(key + time + stringToSign))).Replace("-", "");
+                Check.Equal("firma token con query y cuerpo vacío", expected, TuyaCloud.Sign(secret, key, null, time, "GET", url, ""));
+                const string body = "{\"power\":1,\"mode\":0,\"temp\":24,\"wind\":2}";
+                const string path = "/v2.0/infrareds/ir-inventado/air-conditioners/ac-inventado/scenes/command";
+                string hash;
+                using (var sha = System.Security.Cryptography.SHA256.Create())
+                    hash = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(body))).Replace("-", "").ToLowerInvariant();
+                string signed = key + "token-inventado" + time + "POST\n" + hash + "\n\n" + path;
+                expected = BitConverter.ToString(hmac.ComputeHash(Encoding.UTF8.GetBytes(signed))).Replace("-", "");
+                Check.Equal("firma comando incluye token y SHA del cuerpo", expected,
+                    TuyaCloud.Sign(secret, key, "token-inventado", time, "POST", path, body));
+            }
+        }
+
+        private static void Config_Aire(string folder)
+        {
+            Check.Equal<string>("sin tuya.json no hay credenciales cloud", null, IotConfig.Load(folder).ApiKey);
+            File.WriteAllText(Path.Combine(folder, "tuya.json"), "{\"apiKey\":\"cliente-inventado\",\"apiSecret\":\"secreto-inventado\",\"apiRegion\":\"us\"}");
+            string path = Path.Combine(folder, "tuya-devices.json"), original = File.ReadAllText(path);
+            try
+            {
+                Check.Equal<string>("sin entrada aire", null, IotConfig.Load(folder).RemoteId);
+                File.WriteAllText(path, "[{\"category\":\"otro\",\"id\":\"ignorar\"},{\"category\":\"infrared_ac\",\"id\":\"ac-inventado\",\"gateway_id\":\"ir-inventado\"}]");
+                IotConfig cfg = IotConfig.Load(folder);
+                Check.Equal("cloud key", "cliente-inventado", cfg.ApiKey);
+                Check.Equal("cloud secret", "secreto-inventado", cfg.ApiSecret);
+                Check.Equal("región us", "https://openapi.tuyaus.com", cfg.CloudEndpoint);
+                Check.Equal("remote desde category", "ac-inventado", cfg.RemoteId);
+                Check.Equal("infrared desde gateway", "ir-inventado", cfg.InfraredId);
+                File.Delete(path);
+                Check.Equal<string>("archivo devices faltante tolerado", null, IotConfig.Load(folder).RemoteId);
+                File.WriteAllText(path, "{");
+                Check.Equal<string>("archivo devices roto tolerado", null, IotConfig.Load(folder).RemoteId);
+            }
+            finally { File.WriteAllText(path, original); File.Delete(Path.Combine(folder, "tuya.json")); }
+        }
+
+        private static void Aire_CommandsAndActions()
+        {
+            using (var f = new HubFixture())
+            {
+                f.Config.InfraredId = "ir-inventado"; f.Config.RemoteId = "ac-inventado";
+                var cloud = new FakeCloud();
+                using (var hub = new IotHub(f.Config, f.Wiz, f.Tuya, delegate { return f.Now; }, false, cloud))
+                {
+                    var host = new QuietHost();
+                    var palette = new IotPaletteAction(hub); palette.Attach(host);
+                    var brightness = new IotBrightnessAction(hub); brightness.Attach(host);
+                    var key = new IotAireAction(hub); key.Attach(host);
+                    hub.MoveSelection(-1);
+                    Check.Equal("Aire no resuelve luces", 0, hub.Resolve("Aire").Count);
+                    Check.Equal("selección no hace I/O", 0, cloud.Reads);
+                    palette.Rotate("p", 1); palette.Press("p"); brightness.Press("b");
+                    Check.Equal("desconocido no aplica perillas", 0, cloud.Sends.Count);
+                    hub.Flush();
+                    Check.Equal("selección dispara lectura inmediata", 1, cloud.Reads);
+                    Check.Equal("apagado mostrado", "Apagado", hub.Aire.Summary);
+                    palette.Rotate("p", 1); brightness.Rotate("b", 3);
+                    hub.Flush();
+                    Check.Equal("giros son sólo preview", 0, cloud.Sends.Count);
+                    palette.Press("p"); hub.Flush();
+                    Check.Equal("modo aplicado", 1, hub.Aire.Mode);
+                    Check.Equal("aplicar modo prende", 1, hub.Aire.Power);
+                    Check.Equal("un envío por presión", 1, cloud.Sends.Count);
+                    Check.Equal("modo conserva temp real", 24, hub.Aire.Temp);
+                    Check.Equal("modo conserva viento", 2, hub.Aire.Wind);
+                    brightness.Press("b"); hub.Flush();
+                    Check.Equal("temp aplica preview", 27, hub.Aire.Temp);
+                    Check.Equal("temp conserva modo", 1, hub.Aire.Mode);
+                    Check.Equal("resumen encendido", "Calor 27°", hub.Aire.Summary);
+                    hub.Toggle(); hub.Flush();
+                    Check.Equal("selector alterna power", 0, hub.Aire.Power);
+                    hub.ApplyAireTemp(26); hub.Flush();
+                    Check.Equal("aplicar temp apagado prende", 1, hub.Aire.Power);
+                    key.Press("k"); hub.Flush();
+                    Check.Equal("tecla alterna power", 0, hub.Aire.Power);
+                    int count = cloud.Sends.Count;
+                    key.LongPress("k"); hub.Flush();
+                    Check.Equal("toque largo no manda", count, cloud.Sends.Count);
+                    brightness.Rotate("b", int.MaxValue); brightness.Press("b"); hub.Flush();
+                    Check.Equal("temp clamp superior", 30, hub.Aire.Temp);
+                    brightness.Rotate("b", int.MinValue); brightness.Press("b"); hub.Flush();
+                    Check.Equal("temp clamp inferior", 16, hub.Aire.Temp);
+                    palette.Rotate("p", -2); palette.Press("p"); hub.Flush();
+                    Check.Equal("modo circular negativo", 4, hub.Aire.Mode);
+                    palette.Rotate("p", 2); brightness.Rotate("b", 7);
+                    hub.MoveSelection(1); hub.MoveSelection(-1);
+                    palette.Press("p"); brightness.Press("b"); hub.Flush();
+                    Check.Equal("cambio descarta preview modo", 4, hub.Aire.Mode);
+                    Check.Equal("cambio descarta preview temp", 16, hub.Aire.Temp);
+                    hub.ApplyAireMode(0); hub.ApplyAireTemp(23); hub.Flush();
+                    Check.Equal("cola conserva ambos campos: modo", 0, hub.Aire.Mode);
+                    Check.Equal("cola conserva ambos campos: temp", 23, hub.Aire.Temp);
+                    int before = cloud.Sends.Count;
+                    hub.ToggleAire(); hub.ToggleAire(); hub.Flush();
+                    Check.Equal("dos gestos mandan dos veces", before + 2, cloud.Sends.Count);
+                    Check.Equal("doble toggle vuelve al estado inicial", 1, hub.Aire.Power);
+                    AireState copy = hub.Aire; copy.Temp = 30;
+                    Check.Equal("estado público es copia", 23, hub.Aire.Temp);
+                    palette.Rotate("p", 1); brightness.Rotate("b", 2);
+                    f.Now = f.Now.AddSeconds(10); hub.Tick(f.Now); hub.MoveSelection(-1);
+                    palette.Press("p"); brightness.Press("b"); hub.Flush();
+                    Check.Equal("timeout descarta preview modo", 0, hub.Aire.Mode);
+                    Check.Equal("timeout descarta preview temp", 23, hub.Aire.Temp);
+                    count = cloud.Sends.Count;
+                    var lights = new IotLightsAction(hub);
+                    lights.Press("l"); hub.CycleTemperature(); hub.AllOff(); hub.Flush();
+                    Check.Equal("luces y Todo off no mandan al aire", count, cloud.Sends.Count);
+                    // Sondeo durante preview conserva lo girado.
+                    brightness.Rotate("b", 4);
+                    f.Now = f.Now.AddSeconds(60); hub.TouchSelection(); cloud.State.Temp = 22; hub.Flush();
+                    brightness.Press("b"); hub.Flush();
+                    Check.Equal("sondeo no pisa preview", 27, hub.Aire.Temp);
+                    cloud.FailSend = true; hub.ToggleAire(); hub.Flush();
+                    Check.Equal<AireState>("fallo deja estado desconocido", null, hub.Aire);
+                    count = cloud.Sends.Count; int reads = cloud.Reads;
+                    f.Now = f.Now.AddSeconds(61); hub.TouchSelection(); hub.Flush();
+                    Check.Equal("fallo no reintenta envío", count, cloud.Sends.Count);
+                    Check.Equal("fallo no reintenta lectura", reads, cloud.Reads);
+                    cloud.FailRead = true; hub.ToggleAire(); hub.Flush();
+                    Check.Equal("toggle desconocido lee primero", reads + 1, cloud.Reads);
+                    Check.Equal("lectura fallida no manda", count, cloud.Sends.Count);
+                    cloud.FailRead = false; cloud.FailSend = false; hub.ToggleAire(); hub.Flush();
+                    Check.Equal("toggle desconocido exitoso manda una vez", count + 1, cloud.Sends.Count);
+                }
+            }
+        }
+
+        private static void Aire_PollingAndLights()
+        {
+            using (var f = new HubFixture())
+            {
+                f.Config.InfraredId = "ir-inventado"; f.Config.RemoteId = "ac-inventado";
+                var cloud = new FakeCloud();
+                using (var hub = new IotHub(f.Config, f.Wiz, f.Tuya, delegate { return f.Now; }, false, cloud))
+                {
+                    object visible = new object(); hub.SetVisible(visible, true); hub.Flush();
+                    Check.Equal("otras acciones no sondean aire", 0, cloud.Reads);
+                    hub.SetAireVisible(visible, true);
+                    Check.Equal("visibilidad sin I/O UI", 0, cloud.Reads);
+                    hub.Flush(); Check.Equal("tecla visible lee aire", 1, cloud.Reads);
+                    f.Now = f.Now.AddSeconds(59); hub.Flush();
+                    Check.Equal("no sondea antes de 60 s", 1, cloud.Reads);
+                    f.Now = f.Now.AddSeconds(1); hub.Flush();
+                    Check.Equal("sondea a los 60 s", 2, cloud.Reads);
+                    hub.SetAireVisible(visible, false);
+                    f.Now = f.Now.AddSeconds(60); hub.Flush();
+                    Check.Equal("oculto no sondea", 2, cloud.Reads);
+                    hub.MoveSelection(-1); hub.Flush();
+                    Check.Equal("selección con dato viejo lee", 3, cloud.Reads);
+                    hub.MoveSelection(1); hub.MoveSelection(-1); hub.Flush();
+                    Check.Equal("selección con dato reciente usa caché", 3, cloud.Reads);
+                    hub.MoveSelection(1);
+                    var host = new QuietHost();
+                    var palette = new IotPaletteAction(hub); palette.Attach(host);
+                    var brightness = new IotBrightnessAction(hub); brightness.Attach(host);
+                    f.Wiz.Sent.Clear();
+                    palette.Rotate("p", 1); hub.Flush();
+                    Check.Equal("paleta luces gira sin mandar", 0, f.Wiz.Sent.Count);
+                    palette.Press("p"); hub.Flush();
+                    Check.Equal("paleta luces aplica a todas", 2, f.Wiz.Sent.Count);
+                    Check.Equal("paleta mantiene naranja", 100, (int)f.Wiz.Sent[0].Values["g"]);
+                    f.Wiz.Sent.Clear(); brightness.Rotate("b", 1); hub.Flush();
+                    Check.Equal("brillo luces aplica al girar", 2, f.Wiz.Sent.Count);
+                    Check.Equal("brillo conserva paso 5", 55, (int)f.Wiz.Sent[0].Values["dimming"]);
+                    f.Wiz.Sent.Clear(); brightness.Press("b"); hub.Flush();
+                    Check.Equal("brillo al apretar vuelve al ritmo", true, (bool)f.Wiz.Sent[0].Values["state"]);
+                    Check.Equal("perillas luces no envían al aire", 0, cloud.Sends.Count);
+                    hub.SetVisible(visible, false);
+                    hub.MoveSelection(-1);
+                    f.Now = f.Now.AddSeconds(8); brightness.Rotate("b", 1);
+                    hub.Tick(f.Now.AddSeconds(9));
+                    Check.Equal("girar temp renueva selección", "Aire", hub.Selected);
+                    f.Now = f.Now.AddSeconds(8); palette.Rotate("p", 1);
+                    hub.Tick(f.Now.AddSeconds(9));
+                    Check.Equal("girar modo renueva selección", "Aire", hub.Selected);
+                    hub.MoveSelection(1);
+                    f.Config.RemoteId = null;
+                    hub.SetAireVisible(visible, true); hub.Flush();
+                    Check.Equal<AireState>("sin ID muestra Sin señal", null, hub.Aire);
+                    int reads = cloud.Reads;
+                    f.Now = f.Now.AddSeconds(61); hub.Flush();
+                    Check.Equal("config ausente no llama cloud", reads, cloud.Reads);
+                }
+            }
+            var unavailable = new TuyaCloud(null, null, null);
+            Check.Equal<AireState>("sin credenciales no intenta red", null, unavailable.AcStatus("ir-inventado", "ac-inventado"));
+            Check.Equal("sin credenciales no envía", false, unavailable.AcSend("ir-inventado", "ac-inventado", 1, 0, 24, 0));
         }
 
         public static int Main(string[] args)
@@ -653,6 +884,10 @@ namespace StreamDeckAudio
                 Vacuum_StepByStatus();
                 Purifier_SpeedCycle();
                 Tuya_TogglesAndFailures();
+                Cloud_Signing();
+                Config_Aire(folder);
+                Aire_CommandsAndActions();
+                Aire_PollingAndLights();
                 return Check.Report();
             }
             catch (Exception ex) { Console.WriteLine("FALLA: " + ex.Message); return 1; }
