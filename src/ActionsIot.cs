@@ -157,7 +157,14 @@ namespace StreamDeckAudio
             base.WillDisappear(context);
             if (Contexts.Count == 0) Hub.SetAireVisible(this, false);
         }
-        protected override void Render(string context) { ShowAire(context, OnKnob(context)); }
+        // Tecla de prender/apagar: dice el estado en palabras, como los enchufes.
+        protected override void Render(string context)
+        {
+            AireState state = Hub.Aire;
+            bool on = state != null && state.Power == 1;
+            string value = state == null ? NoData : on ? "Prendido" : "Apagado";
+            Show(context, KeyImage.Lit("iot-aire", "Aire", value, OnKnob(context), on ? OnTint : OffTint, false));
+        }
     }
 
     internal sealed class IotSelectorAction : IotAction
