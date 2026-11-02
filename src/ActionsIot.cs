@@ -3,11 +3,15 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("IotTests")]
+
 namespace StreamDeckAudio
 {
     internal abstract class IotAction : ActionBase
     {
-        protected IotHub Hub { get { return IotHub.Shared; } }
+        private readonly IotHub _hub;
+        protected IotAction(IotHub hub = null) { _hub = hub; }
+        protected IotHub Hub { get { return _hub ?? IotHub.Shared; } }
         private readonly Dictionary<string, string> _rendered = new Dictionary<string, string>();
 
         public override bool WantsTick { get { return Contexts.Count > 0; } }
@@ -78,6 +82,13 @@ namespace StreamDeckAudio
             return lights.Count == 0 ? null : Hub.Pilot(lights[0]);
         }
 
+        protected void ShowAire(string context, bool knob)
+        {
+            AireState state = Hub.Aire;
+            Show(context, KeyImage.Lit("iot-aire", "Aire", state == null ? NoData : state.Summary,
+                knob, state != null && state.Power == 1 ? OnTint : OffTint, false));
+        }
+
         protected void Show(string context, string image)
         {
             string previous;
@@ -85,6 +96,74 @@ namespace StreamDeckAudio
             Host.SetImage(context, image);
             Host.SetTitle(context, string.Empty);
             _rendered[context] = image;
+        }
+    }
+
+    // La revisión de selección también invalida giros aunque la UI procese Changed más tarde.
+    internal sealed class AirePreview
+    {
+        private int _version = -1;
+        private readonly Dictionary<string, int> _values = new Dictionary<string, int>();
+        public void Sync(IotHub hub)
+        {
+            if (_version == hub.SelectionVersion) return;
+            _version = hub.SelectionVersion; _values.Clear();
+        }
+        public void Remove(string context) { _values.Remove(context); }
+        private int Current(IotHub hub, string context, bool mode, AireState state)
+        {
+            Sync(hub);
+            int value;
+            return _values.TryGetValue(context, out value) ? value : mode ? state.Mode : state.Temp;
+        }
+        public void Rotate(IotHub hub, string context, int ticks, bool mode)
+        {
+            AireState state = hub.Aire;
+            if (state == null) { Sync(hub); return; }
+            long value = Current(hub, context, mode, state) + (long)ticks;
+            _values[context] = mode ? (int)((value % 5 + 5) % 5) : (int)Math.Max(16, Math.Min(30, value));
+        }
+        public string Value(IotHub hub, string context, bool mode)
+        {
+            AireState state = hub.Aire;
+            if (state == null) return "Sin señal";
+            int value = Current(hub, context, mode, state);
+            return (mode ? AireState.Modes[value] : value + "°") + (value != (mode ? state.Mode : state.Temp) ? " *" : "");
+        }
+        public void Apply(IotHub hub, string context, bool mode)
+        {
+            AireState state = hub.Aire;
+            if (state == null) return;
+            int value = Current(hub, context, mode, state);
+            if (mode) hub.ApplyAireMode(value); else hub.ApplyAireTemp(value);
+            _values.Remove(context);
+        }
+    }
+
+    internal sealed class IotAireAction : IotAction
+    {
+        public IotAireAction(IotHub hub = null) : base(hub) { }
+        public override string Uuid { get { return "com.knupwns.audioknob.iot.aire"; } }
+        protected override bool DefaultsToKnob { get { return false; } }
+        protected override bool HandlesLongPress { get { return true; } }
+        public override void Press(string context) { Hub.ToggleAire(); }
+        public override void WillAppear(string context, Dictionary<string, object> settings, string controller)
+        {
+            base.WillAppear(context, settings, controller);
+            if (Contexts.Count == 1) Hub.SetAireVisible(this, true);
+        }
+        public override void WillDisappear(string context)
+        {
+            base.WillDisappear(context);
+            if (Contexts.Count == 0) Hub.SetAireVisible(this, false);
+        }
+        // Tecla de prender/apagar: dice el estado en palabras, como los enchufes.
+        protected override void Render(string context)
+        {
+            AireState state = Hub.Aire;
+            bool on = state != null && state.Power == 1;
+            string value = state == null ? NoData : on ? "Prendido" : "Apagado";
+            Show(context, KeyImage.Lit("iot-aire", "Aire", value, OnKnob(context), on ? OnTint : OffTint, false));
         }
     }
 
@@ -103,6 +182,7 @@ namespace StreamDeckAudio
 
         protected override void Render(string context)
         {
+            if (Hub.Selected == "Aire") { ShowAire(context, OnKnob(context)); return; }
             IList<IotLight> lights = Hub.Resolve(Hub.Selected);
             WizPilot first = FirstPilot();
             bool manual = false, rhythm = lights.Count > 0;
@@ -122,6 +202,8 @@ namespace StreamDeckAudio
 
     internal sealed class IotPaletteAction : IotAction
     {
+        public IotPaletteAction(IotHub hub = null) : base(hub) { }
+        private readonly AirePreview _aire = new AirePreview();
         private const string DefaultColors = "#ff0000 #ff6400 #ffc800 #00ff00 #00c8ff #0000ff #9600ff #ff0078";
         private readonly Dictionary<string, int> _indices = new Dictionary<string, int>();
         private readonly Dictionary<string, string> _previews = new Dictionary<string, string>();
@@ -156,6 +238,7 @@ namespace StreamDeckAudio
         {
             if (ticks == 0) return;
             Hub.TouchSelection();
+            if (Hub.Selected == "Aire") { _aire.Rotate(Hub, context, ticks, true); Render(context); return; }
             int count = Colors(context).Count;
             _indices[context] = (int)(((Index(context, count) + (long)ticks) % count + count) % count);
             Render(context);
@@ -163,6 +246,7 @@ namespace StreamDeckAudio
 
         public override void Press(string context)
         {
+            if (Hub.Selected == "Aire") { _aire.Apply(Hub, context, true); return; }
             List<Color> colors = Colors(context);
             Color color = colors[Index(context, colors.Count)];
             Hub.ApplyColor(color.R, color.G, color.B);
@@ -172,11 +256,18 @@ namespace StreamDeckAudio
         {
             base.WillDisappear(context);
             _indices.Remove(context);
+            _aire.Remove(context);
             if (Contexts.Count == 0) _previews.Clear();
         }
 
         protected override void Render(string context)
         {
+            _aire.Sync(Hub);
+            if (Hub.Selected == "Aire")
+            {
+                Show(context, KeyImage.Lit("iot-aire", "Modo", _aire.Value(Hub, context, true), OnKnob(context), OffTint, false));
+                return;
+            }
             List<Color> colors = Colors(context);
             Color color = colors[Index(context, colors.Count)];
             string key = color.ToArgb() + "\n" + OnKnob(context);
@@ -202,16 +293,33 @@ namespace StreamDeckAudio
 
     internal sealed class IotBrightnessAction : IotAction
     {
+        public IotBrightnessAction(IotHub hub = null) : base(hub) { }
+        private readonly AirePreview _aire = new AirePreview();
         public override string Uuid { get { return "com.knupwns.audioknob.iot.brightness"; } }
         public override void Rotate(string context, int ticks)
         {
             if (ticks == 0) return;
+            if (Hub.Selected == "Aire")
+            {
+                Hub.TouchSelection(); _aire.Rotate(Hub, context, ticks, false); Render(context); return;
+            }
             long delta = (long)ticks * Math.Max(1, Math.Min(25, Int(context, "step", 5)));
             Hub.AddBrightness((int)Math.Max(int.MinValue, Math.Min(int.MaxValue, delta)));
         }
-        public override void Press(string context) { Hub.Resume(); }
+        public override void Press(string context)
+        {
+            if (Hub.Selected == "Aire") _aire.Apply(Hub, context, false);
+            else Hub.Resume();
+        }
+        public override void WillDisappear(string context) { base.WillDisappear(context); _aire.Remove(context); }
         protected override void Render(string context)
         {
+            _aire.Sync(Hub);
+            if (Hub.Selected == "Aire")
+            {
+                Show(context, KeyImage.Lit("iot-aire", "Temp", _aire.Value(Hub, context, false), OnKnob(context), OffTint, false));
+                return;
+            }
             WizPilot p = FirstPilot();
             string value = p == null || !p.Dimming.HasValue ? NoData : p.Dimming.Value + " %";
             Show(context, KeyImage.Lit("iot-brightness", "Brillo", value, OnKnob(context),
@@ -303,6 +411,7 @@ namespace StreamDeckAudio
 
     internal sealed class IotLightsAction : IotAction
     {
+        public IotLightsAction(IotHub hub = null) : base(hub) { }
         private static readonly Color NeutralTint = ColorTranslator.FromHtml("#F4E7D2");
         private static readonly Color ColdTint = ColorTranslator.FromHtml("#9CCBFF");
         private static readonly Color NightTint = ColorTranslator.FromHtml("#A99BFF");

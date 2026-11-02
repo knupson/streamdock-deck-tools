@@ -71,6 +71,16 @@
       "PropertyInspectorPath": "separator.html"
     },
     {
+      "Icon": "images/iot-aire",
+      "Name": "IoT — Aire",
+      "States": [{ "Image": "images/iot-aire", "TitleAlignment": "top", "FontSize": "10" }],
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "Tooltip": "Toque: prendé o apagá el aire. Toque largo: sin acción",
+      "UUID": "com.knupwns.audioknob.iot.aire",
+      "PropertyInspectorPath": "separator.html"
+    },
+    {
       "Icon": "images/action",
       "Name": "Audio Output Knob",
       "States": [

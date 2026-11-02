@@ -115,6 +115,7 @@ internal static class GenIcons
         Write(Path.Combine(dir, "iot-off.png"), 144, DrawIotPower);
         Write(Path.Combine(dir, "iot-plug.png"), 144, DrawIotPlug);
         Write(Path.Combine(dir, "iot-purifier.png"), 144, DrawIotPurifier);
+        Write(Path.Combine(dir, "iot-aire.png"), 144, DrawIotPower);
         Write(Path.Combine(dir, "iot-vacuum.png"), 144, DrawIotVacuum);
         Write(Path.Combine(dir, "screens.png"), 144, DrawScreens);
         Write(Path.Combine(dir, "screens-off.png"), 144,

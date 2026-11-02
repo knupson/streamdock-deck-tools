@@ -22,6 +22,21 @@ namespace StreamDeckAudio
     {
         public const string DefaultFolder = @"E:\Repositorios\Personal\_datos\iot";
         public string Broadcast;
+        public string ApiKey, ApiSecret, ApiRegion, InfraredId, RemoteId;
+        public string CloudEndpoint
+        {
+            get
+            {
+                switch (ApiRegion)
+                {
+                    case "us": return "https://openapi.tuyaus.com";
+                    case "eu": return "https://openapi.tuyaeu.com";
+                    case "cn": return "https://openapi.tuyacn.com";
+                    case "in": return "https://openapi.tuyain.com";
+                    default: return null;
+                }
+            }
+        }
         public readonly List<IotLight> Lights = new List<IotLight>();
         public readonly Dictionary<string, IotTuyaDevice> Tuya = new Dictionary<string, IotTuyaDevice>();
         private string _lightsPath;
@@ -50,8 +65,23 @@ namespace StreamDeckAudio
                     }
                 }
             }
-            var devices = serializer.Deserialize<List<Dictionary<string, object>>>(
-                File.ReadAllText(Path.Combine(folder, "tuya-devices.json")));
+            List<Dictionary<string, object>> devices = null;
+            try
+            {
+                devices = serializer.Deserialize<List<Dictionary<string, object>>>(
+                    File.ReadAllText(Path.Combine(folder, "tuya-devices.json")));
+                if (devices != null) foreach (var entry in devices)
+                    if (Json.Str(entry, "category") == "infrared_ac")
+                    { cfg.RemoteId = Json.Str(entry, "id"); cfg.InfraredId = Json.Str(entry, "gateway_id"); break; }
+            }
+            catch (Exception) { /* Sin archivo válido, el aire queda sin señal. */ }
+            try
+            {
+                var cloud = serializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(folder, "tuya.json")));
+                cfg.ApiKey = Json.Str(cloud, "apiKey"); cfg.ApiSecret = Json.Str(cloud, "apiSecret");
+                cfg.ApiRegion = Json.Str(cloud, "apiRegion");
+            }
+            catch (Exception) { /* Las luces locales no necesitan credenciales cloud. */ }
             Dictionary<string, object> aliases = Json.Dict(root, "tuya");
             if (aliases != null)
             {
