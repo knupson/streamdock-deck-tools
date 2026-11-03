@@ -48,42 +48,29 @@ namespace StreamDeckAudio
         private readonly ITuyaLink _tuya;
         private readonly ITuyaCloudLink _cloud;
         private AireState _aire;
-        private DateTime? _lastAirePoll;
-        private bool _aireFailed;
         private readonly HashSet<object> _aireVisible = new HashSet<object>();
         private int _selectionVersion;
         public int SelectionVersion { get { lock (_gate) return _selectionVersion; } }
-        // El control IR no puede leer el aire: la nube sólo sabe lo último que se mandó, y el
-        // código de encendido de este equipo alterna. Si lo mostrado queda al revés, el toque
-        // largo lo invierte sin mandar nada y la corrección se recuerda (también entre reinicios).
-        private bool _aireFlip;
+        // El estado es local: el control IR sólo permite alternar el encendido.
+        private bool HasAireIds { get { return !string.IsNullOrWhiteSpace(_config.InfraredId) && !string.IsNullOrWhiteSpace(_config.RemoteId); } }
         public AireState Aire
         {
-            get
-            {
-                lock (_gate)
-                {
-                    if (_aire == null) return null;
-                    AireState shown = _aire.Copy();
-                    if (_aireFlip) shown.Power = 1 - shown.Power;
-                    return shown;
-                }
-            }
+            get { lock (_gate) return HasAireIds ? _aire.Copy() : null; }
         }
-        private static string AireFlipPath { get { return Path.Combine(IotConfig.DefaultFolder, "aire-invertido.txt"); } }
+        private static string AireStatePath { get { return Path.Combine(IotConfig.DefaultFolder, "aire-estado.txt"); } }
+        private void SaveAire()
+        {
+            if (!_parallel) return;
+            try { File.WriteAllText(AireStatePath, _aire.Serialize()); }
+            catch (Exception ex) { Log("aire: no se pudo guardar el estado: " + ex.Message); }
+        }
         public void FlipAire()
         {
-            bool flip;
             lock (_gate)
             {
-                if (_disposed) return;
-                _aireFlip = !_aireFlip;
-                flip = _aireFlip;
-            }
-            if (_parallel)
-            {
-                try { File.WriteAllText(AireFlipPath, flip ? "1" : "0"); }
-                catch (Exception ex) { Log("aire: no se pudo guardar la corrección: " + ex.Message); }
+                if (_disposed || !HasAireIds) return;
+                _aire.Power = 1 - _aire.Power;
+                SaveAire();
             }
             Notify();
         }
@@ -129,9 +116,10 @@ namespace StreamDeckAudio
             targets.Add("Aire");
             _targets = targets.AsReadOnly();
             _parallel = background;
+            _aire = AireState.Parse(null);
             if (background)
             {
-                try { _aireFlip = File.Exists(AireFlipPath) && File.ReadAllText(AireFlipPath).Trim() == "1"; }
+                try { _aire = AireState.Parse(File.ReadAllText(AireStatePath)); }
                 catch (Exception) { }
             }
             if (background) _timer = new Timer(delegate(object ignored) { Pump(_now()); }, null, Timeout.Infinite, Timeout.Infinite);
@@ -161,11 +149,6 @@ namespace StreamDeckAudio
                 if (previous != _selection)
                 {
                     _selectionVersion++;
-                    if (_targets[_selection] == "Aire")
-                    {
-                        _aireFailed = false;
-                        if (_aire == null) _lastAirePoll = null;
-                    }
                 }
                 _touched = _now();
                 Wake();
@@ -348,13 +331,13 @@ namespace StreamDeckAudio
         public void VacuumStep() { QueueTuya("aspiradora", "vacuum"); }
 
         public void ToggleAire() { QueueAire("toggle", 0); }
-        public void ApplyAireMode(int mode) { QueueAire("mode", Clamp(mode, 0, 4)); }
+        public void ApplyAireMode(int mode) { QueueAire("mode", Clamp(mode, 0, 3)); }
         public void ApplyAireTemp(int temp) { QueueAire("temp", Clamp(temp, 16, 30)); }
         private void QueueAire(string action, int value)
         {
             lock (_gate)
             {
-                if (_disposed || (action != "toggle" && _aire == null)) return;
+                if (_disposed || !HasAireIds) return;
                 _touched = _now();
                 _queue.Add(new Work { AireAction = action, AireValue = value });
                 Wake();
@@ -366,35 +349,35 @@ namespace StreamDeckAudio
             lock (_gate)
             {
                 if (_disposed) return;
-                if (visible) { if (_aireVisible.Add(owner)) { _lastAirePoll = null; _aireFailed = false; } }
+                if (visible) _aireVisible.Add(owner);
                 else _aireVisible.Remove(owner);
                 Wake();
             }
         }
-        private AireState ReadAire()
+        private void ExecuteAire(Work work)
         {
-            if (_cloud == null || string.IsNullOrEmpty(_config.InfraredId) || string.IsNullOrEmpty(_config.RemoteId)) return null;
-            try { return _cloud.AcStatus(_config.InfraredId, _config.RemoteId); }
-            catch (Exception) { return null; }
-        }
-        private void ExecuteAire(Work work, DateTime now)
-        {
-            // Se trabaja sobre lo que sabe la nube, no sobre lo mostrado.
             AireState state;
-            bool flip;
-            lock (_gate) { state = _aire == null ? null : _aire.Copy(); flip = _aireFlip; }
-            if (state == null && work.AireAction == "toggle") state = ReadAire();
-            bool ok = false;
-            if (state != null)
+            lock (_gate)
             {
-                // Modo y temperatura dejan el aire prendido según lo mostrado.
-                state.Power = work.AireAction == "toggle" ? 1 - state.Power : flip ? 0 : 1;
-                if (work.AireAction == "mode") state.Mode = work.AireValue;
-                if (work.AireAction == "temp") state.Temp = work.AireValue;
-                try { ok = _cloud.AcSend(_config.InfraredId, _config.RemoteId, state.Power, state.Mode, state.Temp, state.Wind); }
-                catch (Exception) { }
+                if (!HasAireIds) return;
+                state = _aire.Copy();
             }
-            lock (_gate) { _aire = ok ? state : null; _aireFailed = !ok; _lastAirePoll = now; }
+            bool toggle = work.AireAction == "toggle" || state.Power == 0;
+            if (work.AireAction == "mode") state.Mode = work.AireValue;
+            if (work.AireAction == "temp") state.Temp = work.AireValue;
+            try
+            {
+                if (_cloud == null || !_cloud.SendCode(_config.InfraredId, _config.RemoteId,
+                    AireIr.Code(AireIr.Frame(toggle, state.Mode, state.Temp))))
+                { Log("aire: no se pudo enviar el código IR."); return; }
+            }
+            catch (Exception ex) { Log("aire: error al enviar el código IR: " + ex.Message); return; }
+            lock (_gate)
+            {
+                state.Power = work.AireAction == "toggle" ? 1 - _aire.Power : 1;
+                _aire = state;
+                SaveAire();
+            }
         }
 
         private static Dictionary<string, object> TuyaCommand(string action, Dictionary<string, object> status)
@@ -504,7 +487,7 @@ namespace StreamDeckAudio
         }
         private void Execute(Work work, DateTime now)
         {
-            if (work.AireAction != null) { ExecuteAire(work, now); return; }
+            if (work.AireAction != null) { ExecuteAire(work); return; }
             if (work.Light != null)
             {
                 bool ok = false;
@@ -620,24 +603,6 @@ namespace StreamDeckAudio
                     }
                     changed = true;
                 }
-                bool pollAire;
-                lock (_gate)
-                {
-                    pollAire = !_aireFailed && (_aireVisible.Count != 0 || _targets[_selection] == "Aire")
-                        && (!_lastAirePoll.HasValue || now - _lastAirePoll.Value >= TimeSpan.FromSeconds(60))
-                        && !LaneBusy("aire");
-                    if (pollAire) _lastAirePoll = now;
-                }
-                if (pollAire)
-                {
-                    Post("aire", delegate
-                    {
-                        AireState state = ReadAire();
-                        lock (_gate) { _aire = state; _aireFailed = state == null; }
-                    });
-                    changed = true;
-                }
-                // Mostrar el resultado cloud sin esperar las lecturas de equipos locales.
                 if (changed) { Notify(); changed = false; }
                 bool poll;
                 lock (_gate)
