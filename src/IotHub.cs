@@ -16,6 +16,9 @@ namespace StreamDeckAudio
             public int? Brightness;
             public DateTime? LastBrightness;
             public DateTime? DeadUntil;
+            // En Ritmo o en escenas sin brillo (p. ej. luz de noche) la WiZ acepta "dimming" solo
+            // y lo ignora: hace falta pasarla a blanco con una temperatura.
+            public int? WhiteTemp;
         }
 
         private sealed class Work
@@ -180,6 +183,7 @@ namespace StreamDeckAudio
             LightState state = _lights[light];
             state.Version++;
             state.Brightness = null;
+            state.WhiteTemp = null;
             // Cancela también restauraciones pendientes de Identify.
             _queue.RemoveAll(delegate(Work w) { return w.Light == light && w.Identify; });
             if (manual.HasValue) state.Manual = manual.Value;
@@ -251,11 +255,19 @@ namespace StreamDeckAudio
                 foreach (IotLight light in Resolve(_targets[_selection]))
                 {
                     LightState state = _lights[light];
-                    int current = state.Brightness ?? (state.Pilot == null ? 100 : state.Pilot.Dimming ?? 100);
+                    // Sin brillo informado (Ritmo, escenas) se arranca de la mitad, no de 100.
+                    int current = state.Brightness ?? (state.Pilot == null ? 100 : state.Pilot.Dimming ?? 50);
                     state.Brightness = Clamp((long)current + delta, 10, 100);
                     state.Manual = true;
                     state.Version++;
                     _queue.RemoveAll(delegate(Work w) { return w.Light == light && w.Identify; });
+                    if (state.Pilot != null && !state.Pilot.Dimming.HasValue)
+                    {
+                        state.WhiteTemp = state.Pilot.Temp ?? 2700;
+                        state.Pilot.Temp = state.WhiteTemp;
+                        state.Pilot.SceneId = 0;
+                        state.Pilot.SchdPsetId = null;
+                    }
                     if (state.Pilot != null) state.Pilot.Dimming = state.Brightness;
                 }
                 Wake();
@@ -536,8 +548,11 @@ namespace StreamDeckAudio
                             LightState state = _lights[light];
                             if (!state.Brightness.HasValue || (state.LastBrightness.HasValue
                                 && now - state.LastBrightness.Value < TimeSpan.FromMilliseconds(100))) continue;
-                            batch.Add(new Work { Light = light, Values = new Dictionary<string, object> { { "dimming", state.Brightness.Value } }, Version = state.Version });
+                            var values = new Dictionary<string, object> { { "dimming", state.Brightness.Value } };
+                            if (state.WhiteTemp.HasValue) values["temp"] = state.WhiteTemp.Value;
+                            batch.Add(new Work { Light = light, Values = values, Version = state.Version });
                             state.Brightness = null;
+                            state.WhiteTemp = null;
                             DateTime actual = _now();
                             state.LastBrightness = actual > now ? actual : now;
                         }

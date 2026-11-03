@@ -913,6 +913,23 @@ namespace StreamDeckAudio
                 Check.True("orden con relectura fallida no lo deja caído", f.Tuya.Gets > tuyaGets);
             }
         }
+        private static void Brightness_LeavesRhythmScene()
+        {
+            using (var f = new HubFixture())
+            {
+                // Ritmo con escena de luz de noche: la lámpara no informa brillo ni temperatura.
+                foreach (WizPilot p in f.Wiz.Pilots.Values) { p.SceneId = 14; p.Dimming = null; p.Temp = null; }
+                f.Seed();
+                f.Hub.AddBrightness(5);
+                f.Hub.Flush();
+                Check.Equal("sale de la escena con temperatura", 2700, (int)f.Wiz.Sent[0].Values["temp"]);
+                Check.Equal("arranca de la mitad", 55, (int)f.Wiz.Sent[0].Values["dimming"]);
+                f.Now = f.Now.AddMilliseconds(100);
+                f.Hub.AddBrightness(5);
+                f.Hub.Flush();
+                Check.Equal("después sólo brillo", false, f.Wiz.Sent[f.Wiz.Sent.Count - 1].Values.ContainsKey("temp"));
+            }
+        }
         public static int Main(string[] args)
         {
             string folder = null;
@@ -942,6 +959,7 @@ namespace StreamDeckAudio
                 AllOff_SkipsVacuum();
                 CycleTemperature_FromCurrent();
                 Brightness_CoalescesBurst();
+                Brightness_LeavesRhythmScene();
                 Polling_VisibilityCacheAndFailures();
                 Polling_YieldsToCommandsAndSkipsDead();
                 Identify_RestoresWithoutManual();

@@ -321,7 +321,8 @@ namespace StreamDeckAudio
                 return;
             }
             WizPilot p = FirstPilot();
-            string value = p == null || !p.Dimming.HasValue ? NoData : p.Dimming.Value + " %";
+            string value = p == null ? NoData : p.Dimming.HasValue ? p.Dimming.Value + " %"
+                : p.SchdPsetId != null ? "Ritmo" : "Escena";
             Show(context, KeyImage.Lit("iot-brightness", "Brillo", value, OnKnob(context),
                                        p != null && p.On ? OnTint : OffTint, false));
         }
