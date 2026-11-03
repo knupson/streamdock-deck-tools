@@ -147,6 +147,8 @@ namespace StreamDeckAudio
         protected override bool DefaultsToKnob { get { return false; } }
         protected override bool HandlesLongPress { get { return true; } }
         public override void Press(string context) { Hub.ToggleAire(); }
+        // Corrige lo mostrado cuando quedó al revés; no le manda nada al aire.
+        public override void LongPress(string context) { Hub.FlipAire(); }
         public override void WillAppear(string context, Dictionary<string, object> settings, string controller)
         {
             base.WillAppear(context, settings, controller);

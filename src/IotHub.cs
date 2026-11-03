@@ -53,7 +53,40 @@ namespace StreamDeckAudio
         private readonly HashSet<object> _aireVisible = new HashSet<object>();
         private int _selectionVersion;
         public int SelectionVersion { get { lock (_gate) return _selectionVersion; } }
-        public AireState Aire { get { lock (_gate) return _aire == null ? null : _aire.Copy(); } }
+        // El control IR no puede leer el aire: la nube sólo sabe lo último que se mandó, y el
+        // código de encendido de este equipo alterna. Si lo mostrado queda al revés, el toque
+        // largo lo invierte sin mandar nada y la corrección se recuerda (también entre reinicios).
+        private bool _aireFlip;
+        public AireState Aire
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    if (_aire == null) return null;
+                    AireState shown = _aire.Copy();
+                    if (_aireFlip) shown.Power = 1 - shown.Power;
+                    return shown;
+                }
+            }
+        }
+        private static string AireFlipPath { get { return Path.Combine(IotConfig.DefaultFolder, "aire-invertido.txt"); } }
+        public void FlipAire()
+        {
+            bool flip;
+            lock (_gate)
+            {
+                if (_disposed) return;
+                _aireFlip = !_aireFlip;
+                flip = _aireFlip;
+            }
+            if (_parallel)
+            {
+                try { File.WriteAllText(AireFlipPath, flip ? "1" : "0"); }
+                catch (Exception ex) { Log("aire: no se pudo guardar la corrección: " + ex.Message); }
+            }
+            Notify();
+        }
         private readonly Func<DateTime> _now;
         private readonly object _gate = new object(), _pumpGate = new object();
         private readonly Dictionary<IotLight, LightState> _lights = new Dictionary<IotLight, LightState>();
@@ -96,6 +129,11 @@ namespace StreamDeckAudio
             targets.Add("Aire");
             _targets = targets.AsReadOnly();
             _parallel = background;
+            if (background)
+            {
+                try { _aireFlip = File.Exists(AireFlipPath) && File.ReadAllText(AireFlipPath).Trim() == "1"; }
+                catch (Exception) { }
+            }
             if (background) _timer = new Timer(delegate(object ignored) { Pump(_now()); }, null, Timeout.Infinite, Timeout.Infinite);
         }
 
@@ -341,12 +379,16 @@ namespace StreamDeckAudio
         }
         private void ExecuteAire(Work work, DateTime now)
         {
-            AireState state = Aire;
+            // Se trabaja sobre lo que sabe la nube, no sobre lo mostrado.
+            AireState state;
+            bool flip;
+            lock (_gate) { state = _aire == null ? null : _aire.Copy(); flip = _aireFlip; }
             if (state == null && work.AireAction == "toggle") state = ReadAire();
             bool ok = false;
             if (state != null)
             {
-                state.Power = work.AireAction == "toggle" ? 1 - state.Power : 1;
+                // Modo y temperatura dejan el aire prendido según lo mostrado.
+                state.Power = work.AireAction == "toggle" ? 1 - state.Power : flip ? 0 : 1;
                 if (work.AireAction == "mode") state.Mode = work.AireValue;
                 if (work.AireAction == "temp") state.Temp = work.AireValue;
                 try { ok = _cloud.AcSend(_config.InfraredId, _config.RemoteId, state.Power, state.Mode, state.Temp, state.Wind); }

@@ -930,6 +930,31 @@ namespace StreamDeckAudio
                 Check.Equal("después sólo brillo", false, f.Wiz.Sent[f.Wiz.Sent.Count - 1].Values.ContainsKey("temp"));
             }
         }
+        private static void Aire_LongPressCorrectsShownState()
+        {
+            using (var f = new HubFixture())
+            {
+                f.Config.InfraredId = "ir-inventado"; f.Config.RemoteId = "ac-inventado";
+                var cloud = new FakeCloud();
+                cloud.State.Power = 1;
+                using (var hub = new IotHub(f.Config, f.Wiz, f.Tuya, delegate { return f.Now; }, false, cloud))
+                {
+                    var key = new IotAireAction(hub); key.Attach(new QuietHost());
+                    hub.MoveSelection(-1);
+                    hub.Flush();
+                    Check.Equal("la nube dice prendido", 1, hub.Aire.Power);
+                    key.LongPress("k");
+                    Check.Equal("toque largo corrige lo mostrado", 0, hub.Aire.Power);
+                    Check.Equal("toque largo no manda nada", 0, cloud.Sends.Count);
+                    f.Now = f.Now.AddSeconds(61);
+                    hub.Flush();
+                    Check.Equal("la corrección sobrevive al sondeo", 0, hub.Aire.Power);
+                    key.Press("k"); hub.Flush();
+                    Check.Equal("toque alterna lo mostrado", 1, hub.Aire.Power);
+                    Check.Equal("la nube recibe la alternancia", 0, cloud.Sends[0].Power);
+                }
+            }
+        }
         public static int Main(string[] args)
         {
             string folder = null;
@@ -969,6 +994,7 @@ namespace StreamDeckAudio
                 Cloud_Signing();
                 Config_Aire(folder);
                 Aire_CommandsAndActions();
+                Aire_LongPressCorrectsShownState();
                 Aire_PollingAndLights();
                 return Check.Report();
             }
