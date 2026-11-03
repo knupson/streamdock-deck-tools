@@ -13,6 +13,7 @@ namespace StreamDeckAudio
             public int Version;
             public int? Brightness;
             public DateTime? LastBrightness;
+            public DateTime? DeadUntil;
         }
 
         private sealed class Work
@@ -52,6 +53,9 @@ namespace StreamDeckAudio
         private readonly object _gate = new object(), _pumpGate = new object();
         private readonly Dictionary<IotLight, LightState> _lights = new Dictionary<IotLight, LightState>();
         private readonly Dictionary<string, Dictionary<string, object>> _tuyaStatus = new Dictionary<string, Dictionary<string, object>>();
+        private readonly Dictionary<string, DateTime> _tuyaDeadUntil = new Dictionary<string, DateTime>();
+        // Un equipo que no responde frena todo el sondeo (hasta 3 s por intento): se saltea un rato.
+        private static readonly TimeSpan DeadBackoff = TimeSpan.FromSeconds(30);
         private readonly HashSet<object> _visible = new HashSet<object>();
         private readonly List<Work> _queue = new List<Work>();
         private readonly IList<string> _targets;
@@ -402,7 +406,35 @@ namespace StreamDeckAudio
             WizPilot p = null;
             try { p = Read(light); } catch (Exception) { }
             lock (_gate)
-                if (_lights[light].Version == version && !_lights[light].Brightness.HasValue) _lights[light].Pilot = Copy(p);
+            {
+                LightState state = _lights[light];
+                state.DeadUntil = p == null ? _now().Add(DeadBackoff) : (DateTime?)null;
+                if (state.Version == version && !state.Brightness.HasValue) state.Pilot = Copy(p);
+            }
+        }
+        // Sólo con _gate tomado.
+        private bool IsDead(Work w, DateTime now)
+        {
+            DateTime until;
+            if (w.Light != null) return _lights[w.Light].DeadUntil.HasValue && _lights[w.Light].DeadUntil.Value > now;
+            return w.Device != null && _tuyaDeadUntil.TryGetValue(w.Device.Alias, out until) && until > now;
+        }
+        private void SetTuyaStatus(string alias, Dictionary<string, object> status)
+        {
+            lock (_gate)
+            {
+                _tuyaStatus[alias] = status == null ? null : new Dictionary<string, object>(status);
+                if (status == null) _tuyaDeadUntil[alias] = _now().Add(DeadBackoff); else _tuyaDeadUntil.Remove(alias);
+            }
+        }
+        // Sólo con _gate tomado. Mismo criterio que la cola de Pump, para que el sondeo le ceda el paso.
+        private bool HasWork(DateTime now)
+        {
+            if (_queue.Exists(delegate(Work w) { return w.Due <= now; })) return true;
+            foreach (LightState state in _lights.Values)
+                if (state.Brightness.HasValue && (!state.LastBrightness.HasValue
+                    || now - state.LastBrightness.Value >= TimeSpan.FromMilliseconds(100))) return true;
+            return false;
         }
         private void Execute(Work work, DateTime now)
         {
@@ -442,7 +474,7 @@ namespace StreamDeckAudio
                         status = _tuya.Set(work.Device, values) ? _tuya.Status(work.Device) : null;
                 }
                 catch (Exception) { status = null; }
-                lock (_gate) _tuyaStatus[work.Device.Alias] = status == null ? null : new Dictionary<string, object>(status);
+                SetTuyaStatus(work.Device.Alias, status);
             }
         }
 
@@ -455,13 +487,16 @@ namespace StreamDeckAudio
             {
                 Tick(now);
                 bool changed = false;
+              restart:
                 while (true)
                 {
                     Work work = null;
                     lock (_gate)
                     {
                         if (_disposed) return;
-                        int index = _queue.FindIndex(delegate(Work w) { return w.Due <= now; });
+                        // Los equipos que responden primero: uno caído tarda segundos en fallar.
+                        int index = _queue.FindIndex(delegate(Work w) { return w.Due <= now && !IsDead(w, now); });
+                        if (index < 0) index = _queue.FindIndex(delegate(Work w) { return w.Due <= now; });
                         if (index >= 0) { work = _queue[index]; _queue.RemoveAt(index); }
                         else foreach (IotLight light in _config.Lights)
                         {
@@ -502,20 +537,41 @@ namespace StreamDeckAudio
                 }
                 if (poll)
                 {
+                    bool yielded = false;
                     foreach (IotLight light in _config.Lights)
                     {
                         int version;
-                        lock (_gate) { if (_visible.Count == 0 || _disposed) break; version = _lights[light].Version; }
+                        lock (_gate)
+                        {
+                            if (_visible.Count == 0 || _disposed) break;
+                            if (HasWork(now)) { yielded = true; break; }
+                            LightState state = _lights[light];
+                            if (state.DeadUntil.HasValue && state.DeadUntil.Value > now) continue;
+                            version = state.Version;
+                        }
                         Refresh(light, version);
                     }
-                    foreach (IotTuyaDevice device in _config.Tuya.Values)
+                    if (!yielded) foreach (IotTuyaDevice device in _config.Tuya.Values)
                     {
-                        lock (_gate) { if (_visible.Count == 0 || _disposed) break; }
+                        lock (_gate)
+                        {
+                            if (_visible.Count == 0 || _disposed) break;
+                            if (HasWork(now)) { yielded = true; break; }
+                            DateTime until;
+                            if (_tuyaDeadUntil.TryGetValue(device.Alias, out until) && until > now) continue;
+                        }
                         Dictionary<string, object> status = null;
                         try { status = _tuya.Status(device); } catch (Exception) { }
-                        lock (_gate) _tuyaStatus[device.Alias] = status == null ? null : new Dictionary<string, object>(status);
+                        SetTuyaStatus(device.Alias, status);
                     }
                     changed = true;
+                    // Una orden llegó a mitad del sondeo: se ejecuta ya y el sondeo arranca de nuevo.
+                    if (yielded)
+                    {
+                        lock (_gate) _lastPoll = null;
+                        Notify(); changed = false;
+                        goto restart;
+                    }
                 }
                 lock (_gate)
                 {

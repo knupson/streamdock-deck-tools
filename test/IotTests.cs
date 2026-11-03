@@ -232,9 +232,11 @@ namespace StreamDeckAudio
             public Func<DateTime> Now;
             public int Gets;
             public string Broken;
+            public Action<string> OnGet;
             public WizPilot Get(string ip)
             {
                 Gets++;
+                if (OnGet != null) OnGet(ip);
                 if (ip == Broken) throw new IOException("Equipo inventado desconectado");
                 WizPilot p = Pilots[ip];
                 return new WizPilot { On = p.On, SceneId = p.SceneId, Temp = p.Temp, Dimming = p.Dimming, SchdPsetId = p.SchdPsetId };
@@ -850,6 +852,50 @@ namespace StreamDeckAudio
             Check.Equal("sin credenciales no envía", false, unavailable.AcSend("ir-inventado", "ac-inventado", 1, 0, 24, 0));
         }
 
+        private static void Polling_YieldsToCommandsAndSkipsDead()
+        {
+            using (var f = new HubFixture())
+            {
+                f.Hub.SetVisible(f, true);
+                f.Hub.Flush();
+                // Una orden que llega mientras se sondea la primera luz no espera al resto.
+                bool queued = false;
+                f.Wiz.OnGet = delegate(string ip)
+                {
+                    if (queued) return;
+                    queued = true;
+                    f.Hub.TogglePlug("noche");
+                };
+                f.Now = f.Now.AddSeconds(3);
+                int tuyaGets = f.Tuya.Gets;
+                f.Hub.Flush();
+                f.Wiz.OnGet = null;
+                Check.Equal("orden en medio del sondeo se ejecuta", 1, f.Tuya.Sent.Count);
+                Check.True("el sondeo se retoma después", f.Tuya.Gets >= tuyaGets + 5);
+                // Un equipo caído se saltea 30 s en el sondeo.
+                f.Wiz.Broken = f.Config.Lights[0].Ip;
+                f.Tuya.Broken = "aspiradora";
+                f.Now = f.Now.AddSeconds(3);
+                f.Hub.Flush();
+                int wizGets = f.Wiz.Gets; tuyaGets = f.Tuya.Gets;
+                f.Now = f.Now.AddSeconds(3);
+                f.Hub.Flush();
+                Check.Equal("luz caída no se sondea", wizGets + 1, f.Wiz.Gets);
+                Check.Equal("Tuya caído no se sondea", tuyaGets + 3, f.Tuya.Gets);
+                // Las órdenes a equipos sanos salen antes que las de un equipo caído.
+                f.Hub.AllOff();
+                f.Hub.Flush();
+                Check.Equal("primero la luz sana", f.Config.Lights[1].Ip, f.Wiz.Sent[f.Wiz.Sent.Count - 2].Target);
+                Check.Equal("la caída igual recibe la orden", f.Config.Lights[0].Ip, f.Wiz.Sent[f.Wiz.Sent.Count - 1].Target);
+                // Pasados 30 s se vuelve a probar.
+                f.Wiz.Broken = null; f.Tuya.Broken = null;
+                f.Now = f.Now.AddSeconds(31);
+                wizGets = f.Wiz.Gets;
+                f.Hub.Flush();
+                Check.Equal("después de 30 s se reintenta", wizGets + 2, f.Wiz.Gets);
+                Check.True("luz recuperada", f.Hub.Pilot(f.Config.Lights[0]) != null);
+            }
+        }
         public static int Main(string[] args)
         {
             string folder = null;
@@ -880,6 +926,7 @@ namespace StreamDeckAudio
                 CycleTemperature_FromCurrent();
                 Brightness_CoalescesBurst();
                 Polling_VisibilityCacheAndFailures();
+                Polling_YieldsToCommandsAndSkipsDead();
                 Identify_RestoresWithoutManual();
                 Vacuum_StepByStatus();
                 Purifier_SpeedCycle();
