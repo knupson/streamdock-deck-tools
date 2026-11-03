@@ -121,7 +121,7 @@ namespace StreamDeckAudio
             AireState state = hub.Aire;
             if (state == null) { Sync(hub); return; }
             long value = Current(hub, context, mode, state) + (long)ticks;
-            _values[context] = mode ? (int)((value % 5 + 5) % 5) : (int)Math.Max(16, Math.Min(30, value));
+            _values[context] = mode ? (int)((value % 4 + 4) % 4) : (int)Math.Max(16, Math.Min(30, value));
         }
         public string Value(IotHub hub, string context, bool mode)
         {
@@ -147,7 +147,7 @@ namespace StreamDeckAudio
         protected override bool DefaultsToKnob { get { return false; } }
         protected override bool HandlesLongPress { get { return true; } }
         public override void Press(string context) { Hub.ToggleAire(); }
-        // Corrige lo mostrado cuando quedó al revés; no le manda nada al aire.
+        // Alterna y guarda el estado local para corregirlo; no le manda nada al aire.
         public override void LongPress(string context) { Hub.FlipAire(); }
         public override void WillAppear(string context, Dictionary<string, object> settings, string controller)
         {

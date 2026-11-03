@@ -70,9 +70,12 @@ namespace StreamDeckAudio
             {
                 devices = serializer.Deserialize<List<Dictionary<string, object>>>(
                     File.ReadAllText(Path.Combine(folder, "tuya-devices.json")));
-                if (devices != null) foreach (var entry in devices)
-                    if (Json.Str(entry, "category") == "infrared_ac")
-                    { cfg.RemoteId = Json.Str(entry, "id"); cfg.InfraredId = Json.Str(entry, "gateway_id"); break; }
+            }
+            catch (Exception) { /* Sin archivo válido, no se resuelven los equipos locales Tuya. */ }
+            try
+            {
+                var aire = serializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(folder, "aire.json")));
+                cfg.InfraredId = Json.Str(aire, "infraredId"); cfg.RemoteId = Json.Str(aire, "remoteId");
             }
             catch (Exception) { /* Sin archivo válido, el aire queda sin señal. */ }
             try

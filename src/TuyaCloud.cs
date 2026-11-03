@@ -11,16 +11,48 @@ namespace StreamDeckAudio
 {
     internal sealed class AireState
     {
-        public int Power, Mode, Temp, Wind;
-        public AireState Copy() { return new AireState { Power = Power, Mode = Mode, Temp = Temp, Wind = Wind }; }
-        public static readonly string[] Modes = { "Frío", "Calor", "Auto", "Vent", "Seco" };
+        public int Power, Mode, Temp;
+        public AireState Copy() { return new AireState { Power = Power, Mode = Mode, Temp = Temp }; }
+        public static readonly string[] Modes = { "Auto", "Frío", "Seco", "Ventilador" };
         public string Summary { get { return Power == 0 ? "Apagado" : Modes[Mode] + " " + Temp + "°"; } }
+
+        public static AireState Parse(string text)
+        {
+            string[] parts = (text ?? "").Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+            int power, mode, temp;
+            if (parts.Length == 3 && int.TryParse(parts[0], out power) && power >= 0 && power <= 1
+                && int.TryParse(parts[1], out mode) && mode >= 0 && mode <= 3
+                && int.TryParse(parts[2], out temp) && temp >= 16 && temp <= 30)
+                return new AireState { Power = power, Mode = mode, Temp = temp };
+            return new AireState { Power = 0, Mode = 1, Temp = 24 };
+        }
+        public string Serialize() { return Power + " " + Mode + " " + Temp; }
+    }
+
+    internal static class AireIr
+    {
+        public static byte[] Frame(bool toggle, int mode, int temp)
+        {
+            if (mode < 0 || mode > 3) throw new ArgumentOutOfRangeException("mode", "Modo de aire inválido.");
+            if (temp < 16 || temp > 30) throw new ArgumentOutOfRangeException("temp", "Temperatura de aire inválida.");
+            int b1 = (mode >= 2 ? 0x10 : 0) | mode | (toggle ? 0x80 : 0);
+            return new byte[] { 0xC0, (byte)b1, (byte)temp, (byte)(0xFF - ((0xC0 + b1 + temp) & 0xFF)) };
+        }
+
+        public static string Code(byte[] frame)
+        {
+            if (frame == null || frame.Length != 4) throw new ArgumentException("La trama debe tener cuatro bytes.", "frame");
+            var code = new StringBuilder("f6226211");
+            foreach (byte value in frame)
+                for (int bit = 0; bit < 8; bit++)
+                    code.Append("2602").Append((value & (1 << bit)) != 0 ? "7206" : "f401");
+            return code.Append("260252bf").ToString();
+        }
     }
 
     internal interface ITuyaCloudLink
     {
-        AireState AcStatus(string irId, string remoteId);
-        bool AcSend(string irId, string remoteId, int power, int mode, int temp, int wind);
+        bool SendCode(string irId, string remoteId, string code);
     }
 
     // Sincrónico y sin logs de credenciales; sólo se usa desde la cola del hub.
@@ -82,30 +114,15 @@ namespace StreamDeckAudio
             return !string.IsNullOrEmpty(_token) && DateTime.UtcNow < _expires;
         }
 
-        public AireState AcStatus(string irId, string remoteId)
-        {
-            lock (_gate) try
-            {
-                if (!Token()) return null;
-                var data = Json.Dict(Request("GET", "/v2.0/infrareds/" + Uri.EscapeDataString(irId)
-                    + "/remotes/" + Uri.EscapeDataString(remoteId) + "/ac/status", null, _token), "result");
-                int power = Json.Int(data, "power", -1), mode = Json.Int(data, "mode", -1),
-                    temp = Json.Int(data, "temp", -1), wind = Json.Int(data, "wind", -1);
-                if (power < 0 || power > 1 || mode < 0 || mode > 4 || temp < 16 || temp > 30 || wind < 0 || wind > 3) return null;
-                return new AireState { Power = power, Mode = mode, Temp = temp, Wind = wind };
-            }
-            catch (Exception) { return null; }
-        }
-
-        public bool AcSend(string irId, string remoteId, int power, int mode, int temp, int wind)
+        public bool SendCode(string irId, string remoteId, string code)
         {
             lock (_gate) try
             {
                 if (!Token()) return false;
                 string body = new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
-                    { "power", power }, { "mode", mode }, { "temp", temp }, { "wind", wind } });
-                return Request("POST", "/v2.0/infrareds/" + Uri.EscapeDataString(irId)
-                    + "/air-conditioners/" + Uri.EscapeDataString(remoteId) + "/scenes/command", body, _token) != null;
+                    { "code", code } });
+                return Json.Bool(Request("POST", "/v2.0/infrareds/" + Uri.EscapeDataString(irId)
+                    + "/remotes/" + Uri.EscapeDataString(remoteId) + "/learning-codes", body, _token), "result", false);
             }
             catch (Exception) { return false; }
         }
