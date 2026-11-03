@@ -232,9 +232,11 @@ namespace StreamDeckAudio
             public Func<DateTime> Now;
             public int Gets;
             public string Broken;
+            public Action<string> OnGet;
             public WizPilot Get(string ip)
             {
                 Gets++;
+                if (OnGet != null) OnGet(ip);
                 if (ip == Broken) throw new IOException("Equipo inventado desconectado");
                 WizPilot p = Pilots[ip];
                 return new WizPilot { On = p.On, SceneId = p.SceneId, Temp = p.Temp, Dimming = p.Dimming, SchdPsetId = p.SchdPsetId };
@@ -258,9 +260,11 @@ namespace StreamDeckAudio
             public readonly List<Sent> Sent = new List<Sent>();
             public int Gets;
             public string Broken;
+            public int FailStatusAfterSet, FailingStatus;
             public Dictionary<string, object> Status(IotTuyaDevice d)
             {
                 Gets++;
+                if (FailingStatus > 0) { FailingStatus--; throw new IOException("Relectura inventada rechazada"); }
                 if (d.Alias == Broken) throw new IOException("Equipo inventado sin respuesta");
                 Dictionary<string, object> state;
                 return States.TryGetValue(d.Alias, out state) ? new Dictionary<string, object>(state)
@@ -269,6 +273,7 @@ namespace StreamDeckAudio
             public bool Set(IotTuyaDevice d, IDictionary<string, object> dps)
             {
                 Sent.Add(new Sent { Target = d.Alias, Values = new Dictionary<string, object>(dps) });
+                FailingStatus = FailStatusAfterSet;
                 if (d.Alias == Broken) throw new IOException("Equipo inventado sin respuesta");
                 Dictionary<string, object> state;
                 if (States.TryGetValue(d.Alias, out state))
@@ -470,7 +475,8 @@ namespace StreamDeckAudio
                 f.Hub.AllOff();
                 f.Hub.Flush();
                 Check.Equal("fallo de envío no corta otras luces", 2, f.Wiz.Sent.Count);
-                Check.Equal("fallo Tuya no corta otros envíos", 3, f.Tuya.Sent.Count);
+                // El Tuya caído recibe un reintento; los otros dos, un envío cada uno.
+                Check.Equal("fallo Tuya no corta otros envíos", 4, f.Tuya.Sent.Count);
                 f.Hub.SetVisible(second, false);
                 f.Now = f.Now.AddSeconds(3);
                 int gets = f.Wiz.Gets;
@@ -511,7 +517,9 @@ namespace StreamDeckAudio
                 f.Hub.Flush();
                 Check.Equal("Toggle conserva ambos toques", 4, f.Wiz.Sent.Count);
                 Check.Equal("Toggle primero apaga", false, (bool)f.Wiz.Sent[0].Values["state"]);
-                Check.Equal("Toggle luego prende", true, (bool)f.Wiz.Sent[2].Values["state"]);
+                // Cada luz es un carril: dentro de una misma luz se respeta el orden de los toques.
+                Check.Equal("Toggle luego prende la misma luz", f.Wiz.Sent[0].Target, f.Wiz.Sent[1].Target);
+                Check.Equal("Toggle luego prende", true, (bool)f.Wiz.Sent[1].Values["state"]);
             }
         }
 
@@ -850,6 +858,103 @@ namespace StreamDeckAudio
             Check.Equal("sin credenciales no envía", false, unavailable.AcSend("ir-inventado", "ac-inventado", 1, 0, 24, 0));
         }
 
+        private static void Polling_YieldsToCommandsAndSkipsDead()
+        {
+            using (var f = new HubFixture())
+            {
+                f.Hub.SetVisible(f, true);
+                f.Hub.Flush();
+                // Una orden que llega mientras se sondea la primera luz no espera al resto.
+                bool queued = false;
+                f.Wiz.OnGet = delegate(string ip)
+                {
+                    if (queued) return;
+                    queued = true;
+                    f.Hub.TogglePlug("noche");
+                };
+                f.Now = f.Now.AddSeconds(3);
+                int tuyaGets = f.Tuya.Gets;
+                f.Hub.Flush();
+                f.Wiz.OnGet = null;
+                Check.Equal("orden en medio del sondeo se ejecuta", 1, f.Tuya.Sent.Count);
+                Check.True("el sondeo se retoma después", f.Tuya.Gets >= tuyaGets + 5);
+                // Un equipo caído se saltea 30 s en el sondeo.
+                f.Wiz.Broken = f.Config.Lights[0].Ip;
+                f.Tuya.Broken = "aspiradora";
+                f.Now = f.Now.AddSeconds(3);
+                f.Hub.Flush();
+                int wizGets = f.Wiz.Gets; tuyaGets = f.Tuya.Gets;
+                f.Now = f.Now.AddSeconds(3);
+                f.Hub.Flush();
+                Check.Equal("luz caída no se sondea", wizGets + 1, f.Wiz.Gets);
+                Check.Equal("Tuya caído no se sondea", tuyaGets + 3, f.Tuya.Gets);
+                // Las órdenes a equipos sanos salen antes que las de un equipo caído.
+                f.Hub.AllOff();
+                f.Hub.Flush();
+                Check.Equal("primero la luz sana", f.Config.Lights[1].Ip, f.Wiz.Sent[f.Wiz.Sent.Count - 2].Target);
+                Check.Equal("la caída igual recibe la orden", f.Config.Lights[0].Ip, f.Wiz.Sent[f.Wiz.Sent.Count - 1].Target);
+                // Pasados 30 s se vuelve a probar.
+                f.Wiz.Broken = null; f.Tuya.Broken = null;
+                f.Now = f.Now.AddSeconds(31);
+                wizGets = f.Wiz.Gets;
+                f.Hub.Flush();
+                Check.Equal("después de 30 s se reintenta", wizGets + 2, f.Wiz.Gets);
+                Check.True("luz recuperada", f.Hub.Pilot(f.Config.Lights[0]) != null);
+                // La orden llega pero el enchufe rechaza la relectura: se muestra lo mandado y no queda caído.
+                f.Tuya.States["noche"] = new Dictionary<string, object> { { "1", false } };
+                f.Tuya.FailStatusAfterSet = 2;
+                f.Hub.TogglePlug("noche");
+                f.Hub.Flush();
+                f.Tuya.FailStatusAfterSet = 0;
+                Check.Equal("relectura fallida muestra lo mandado", true, (bool)f.Hub.TuyaStatus("noche")["1"]);
+                tuyaGets = f.Tuya.Gets;
+                f.Now = f.Now.AddSeconds(3);
+                f.Hub.Flush();
+                Check.True("orden con relectura fallida no lo deja caído", f.Tuya.Gets > tuyaGets);
+            }
+        }
+        private static void Brightness_LeavesRhythmScene()
+        {
+            using (var f = new HubFixture())
+            {
+                // Ritmo con escena de luz de noche: la lámpara no informa brillo ni temperatura.
+                foreach (WizPilot p in f.Wiz.Pilots.Values) { p.SceneId = 14; p.Dimming = null; p.Temp = null; }
+                f.Seed();
+                f.Hub.AddBrightness(5);
+                f.Hub.Flush();
+                Check.Equal("sale de la escena con temperatura", 2700, (int)f.Wiz.Sent[0].Values["temp"]);
+                Check.Equal("arranca de la mitad", 55, (int)f.Wiz.Sent[0].Values["dimming"]);
+                f.Now = f.Now.AddMilliseconds(100);
+                f.Hub.AddBrightness(5);
+                f.Hub.Flush();
+                Check.Equal("después sólo brillo", false, f.Wiz.Sent[f.Wiz.Sent.Count - 1].Values.ContainsKey("temp"));
+            }
+        }
+        private static void Aire_LongPressCorrectsShownState()
+        {
+            using (var f = new HubFixture())
+            {
+                f.Config.InfraredId = "ir-inventado"; f.Config.RemoteId = "ac-inventado";
+                var cloud = new FakeCloud();
+                cloud.State.Power = 1;
+                using (var hub = new IotHub(f.Config, f.Wiz, f.Tuya, delegate { return f.Now; }, false, cloud))
+                {
+                    var key = new IotAireAction(hub); key.Attach(new QuietHost());
+                    hub.MoveSelection(-1);
+                    hub.Flush();
+                    Check.Equal("la nube dice prendido", 1, hub.Aire.Power);
+                    key.LongPress("k");
+                    Check.Equal("toque largo corrige lo mostrado", 0, hub.Aire.Power);
+                    Check.Equal("toque largo no manda nada", 0, cloud.Sends.Count);
+                    f.Now = f.Now.AddSeconds(61);
+                    hub.Flush();
+                    Check.Equal("la corrección sobrevive al sondeo", 0, hub.Aire.Power);
+                    key.Press("k"); hub.Flush();
+                    Check.Equal("toque alterna lo mostrado", 1, hub.Aire.Power);
+                    Check.Equal("la nube recibe la alternancia", 0, cloud.Sends[0].Power);
+                }
+            }
+        }
         public static int Main(string[] args)
         {
             string folder = null;
@@ -879,7 +984,9 @@ namespace StreamDeckAudio
                 AllOff_SkipsVacuum();
                 CycleTemperature_FromCurrent();
                 Brightness_CoalescesBurst();
+                Brightness_LeavesRhythmScene();
                 Polling_VisibilityCacheAndFailures();
+                Polling_YieldsToCommandsAndSkipsDead();
                 Identify_RestoresWithoutManual();
                 Vacuum_StepByStatus();
                 Purifier_SpeedCycle();
@@ -887,6 +994,7 @@ namespace StreamDeckAudio
                 Cloud_Signing();
                 Config_Aire(folder);
                 Aire_CommandsAndActions();
+                Aire_LongPressCorrectsShownState();
                 Aire_PollingAndLights();
                 return Check.Report();
             }

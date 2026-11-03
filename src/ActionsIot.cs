@@ -147,6 +147,8 @@ namespace StreamDeckAudio
         protected override bool DefaultsToKnob { get { return false; } }
         protected override bool HandlesLongPress { get { return true; } }
         public override void Press(string context) { Hub.ToggleAire(); }
+        // Corrige lo mostrado cuando quedó al revés; no le manda nada al aire.
+        public override void LongPress(string context) { Hub.FlipAire(); }
         public override void WillAppear(string context, Dictionary<string, object> settings, string controller)
         {
             base.WillAppear(context, settings, controller);
@@ -321,7 +323,8 @@ namespace StreamDeckAudio
                 return;
             }
             WizPilot p = FirstPilot();
-            string value = p == null || !p.Dimming.HasValue ? NoData : p.Dimming.Value + " %";
+            string value = p == null ? NoData : p.Dimming.HasValue ? p.Dimming.Value + " %"
+                : p.SchdPsetId != null ? "Ritmo" : "Escena";
             Show(context, KeyImage.Lit("iot-brightness", "Brillo", value, OnKnob(context),
                                        p != null && p.On ? OnTint : OffTint, false));
         }
