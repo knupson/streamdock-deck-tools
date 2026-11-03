@@ -260,9 +260,11 @@ namespace StreamDeckAudio
             public readonly List<Sent> Sent = new List<Sent>();
             public int Gets;
             public string Broken;
+            public int FailStatusAfterSet, FailingStatus;
             public Dictionary<string, object> Status(IotTuyaDevice d)
             {
                 Gets++;
+                if (FailingStatus > 0) { FailingStatus--; throw new IOException("Relectura inventada rechazada"); }
                 if (d.Alias == Broken) throw new IOException("Equipo inventado sin respuesta");
                 Dictionary<string, object> state;
                 return States.TryGetValue(d.Alias, out state) ? new Dictionary<string, object>(state)
@@ -271,6 +273,7 @@ namespace StreamDeckAudio
             public bool Set(IotTuyaDevice d, IDictionary<string, object> dps)
             {
                 Sent.Add(new Sent { Target = d.Alias, Values = new Dictionary<string, object>(dps) });
+                FailingStatus = FailStatusAfterSet;
                 if (d.Alias == Broken) throw new IOException("Equipo inventado sin respuesta");
                 Dictionary<string, object> state;
                 if (States.TryGetValue(d.Alias, out state))
@@ -472,7 +475,8 @@ namespace StreamDeckAudio
                 f.Hub.AllOff();
                 f.Hub.Flush();
                 Check.Equal("fallo de envío no corta otras luces", 2, f.Wiz.Sent.Count);
-                Check.Equal("fallo Tuya no corta otros envíos", 3, f.Tuya.Sent.Count);
+                // El Tuya caído recibe un reintento; los otros dos, un envío cada uno.
+                Check.Equal("fallo Tuya no corta otros envíos", 4, f.Tuya.Sent.Count);
                 f.Hub.SetVisible(second, false);
                 f.Now = f.Now.AddSeconds(3);
                 int gets = f.Wiz.Gets;
@@ -513,7 +517,9 @@ namespace StreamDeckAudio
                 f.Hub.Flush();
                 Check.Equal("Toggle conserva ambos toques", 4, f.Wiz.Sent.Count);
                 Check.Equal("Toggle primero apaga", false, (bool)f.Wiz.Sent[0].Values["state"]);
-                Check.Equal("Toggle luego prende", true, (bool)f.Wiz.Sent[2].Values["state"]);
+                // Cada luz es un carril: dentro de una misma luz se respeta el orden de los toques.
+                Check.Equal("Toggle luego prende la misma luz", f.Wiz.Sent[0].Target, f.Wiz.Sent[1].Target);
+                Check.Equal("Toggle luego prende", true, (bool)f.Wiz.Sent[1].Values["state"]);
             }
         }
 
@@ -894,6 +900,17 @@ namespace StreamDeckAudio
                 f.Hub.Flush();
                 Check.Equal("después de 30 s se reintenta", wizGets + 2, f.Wiz.Gets);
                 Check.True("luz recuperada", f.Hub.Pilot(f.Config.Lights[0]) != null);
+                // La orden llega pero el enchufe rechaza la relectura: se muestra lo mandado y no queda caído.
+                f.Tuya.States["noche"] = new Dictionary<string, object> { { "1", false } };
+                f.Tuya.FailStatusAfterSet = 2;
+                f.Hub.TogglePlug("noche");
+                f.Hub.Flush();
+                f.Tuya.FailStatusAfterSet = 0;
+                Check.Equal("relectura fallida muestra lo mandado", true, (bool)f.Hub.TuyaStatus("noche")["1"]);
+                tuyaGets = f.Tuya.Gets;
+                f.Now = f.Now.AddSeconds(3);
+                f.Hub.Flush();
+                Check.True("orden con relectura fallida no lo deja caído", f.Tuya.Gets > tuyaGets);
             }
         }
         public static int Main(string[] args)
