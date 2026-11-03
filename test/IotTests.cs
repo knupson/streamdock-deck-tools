@@ -810,7 +810,9 @@ namespace StreamDeckAudio
                     AireState copy = hub.Aire; copy.Temp = 30;
                     Check.Equal("estado público es copia", 23, hub.Aire.Temp);
                     palette.Rotate("p", 1); brightness.Rotate("b", 2);
-                    f.Now = f.Now.AddSeconds(10); hub.Tick(f.Now); hub.MoveSelection(-1);
+                    f.Now = f.Now.AddSeconds(10); hub.Tick(f.Now);
+                    Check.Equal("Aire no vuelve solo a Todas", "Aire", hub.Selected);
+                    hub.MoveSelection(1); hub.MoveSelection(-1);
                     palette.Press("p"); brightness.Press("b"); hub.Flush();
                     Check.Equal("timeout descarta preview modo", 0, hub.Aire.Mode);
                     Check.Equal("timeout descarta preview temp", 23, hub.Aire.Temp);

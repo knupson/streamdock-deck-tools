@@ -162,7 +162,8 @@ namespace StreamDeckAudio
             bool changed = false;
             lock (_gate)
             {
-                if (_selection != 0 && now - _touched >= TimeSpan.FromSeconds(10)) { _selection = 0; _selectionVersion++; changed = true; }
+                // Aire queda elegido hasta que se gire la perilla; el resto vuelve a "Todas".
+                if (_selection != 0 && _targets[_selection] != "Aire" && now - _touched >= TimeSpan.FromSeconds(10)) { _selection = 0; _selectionVersion++; changed = true; }
             }
             if (changed) Notify();
         }
