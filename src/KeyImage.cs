@@ -196,6 +196,57 @@ namespace StreamDeckAudio
         }
 
         /// <summary>
+        /// A batch launcher tile: a caption over the icons of what it opens, up to
+        /// four in a grid (one fills the area, two sit side by side). Items with
+        /// no icon are skipped; with none at all, the shortcut glyph stands in.
+        /// </summary>
+        public static string Mosaic(IList<Bitmap> icons, string label, bool knob)
+        {
+            var shown = new List<Bitmap>();
+            foreach (Bitmap icon in icons)
+            {
+                if (icon != null) shown.Add(icon);
+                if (shown.Count == 4) break;
+            }
+            if (shown.Count == 0) return Glyph("shortcut", label, null, knob);
+
+            try
+            {
+                using (var canvas = new Bitmap(Size, Size, PixelFormat.Format32bppArgb))
+                {
+                    using (Graphics g = Prepare(canvas))
+                    {
+                        using (var background = new SolidBrush(Color.Black))
+                            g.FillRectangle(background, 0, 0, Size, Size);
+
+                        if (!string.IsNullOrEmpty(label))
+                            DrawFitted(g, label, Band(2, 34), Ink, 22f, 12f);
+
+                        var area = new RectangleF(10, 38, Size - 20, BottomFor(knob) - 42);
+                        int columns = shown.Count == 1 ? 1 : 2;
+                        int rows = shown.Count > 2 ? 2 : 1;
+                        float cellW = area.Width / columns, cellH = area.Height / rows;
+                        float pad = shown.Count == 1 ? 0f : 3f;
+
+                        for (int i = 0; i < shown.Count; i++)
+                        {
+                            var cell = new RectangleF(area.X + (i % columns) * cellW + pad,
+                                                      area.Y + (i / columns) * cellH + pad,
+                                                      cellW - pad * 2, cellH - pad * 2);
+                            g.DrawImage(shown[i], Fit(shown[i].Width, shown[i].Height, cell));
+                        }
+                    }
+                    return ToDataUrl(canvas);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("KeyImage.Mosaic failed: " + ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>
         /// One line of a stats tile: a short label, its value, and how full the
         /// bar under them is. A row with no bar - uptime, which has no ceiling to
         /// draw against - is text only.

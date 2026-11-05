@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Inicio del día</title>
+  <link rel="stylesheet" href="pi.css" />
+  <style>
+    input[type="text"] {
+      width: 100%;
+      height: 26px;
+      padding: 0 6px;
+      background: var(--field);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font: inherit;
+      outline: none;
+    }
+
+    input[type="text"]:focus { border-color: var(--accent); }
+
+    button {
+      height: 26px;
+      padding: 0 12px;
+      background: var(--field);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover { border-color: var(--accent); }
+
+    code {
+      background: var(--field);
+      padding: 1px 4px;
+      border-radius: 2px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="row">
+    <div class="label">Carpeta</div>
+    <div class="value"><input id="folder" type="text" placeholder="D:\Inicio del día" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label">Texto</div>
+    <div class="value"><input id="label" type="text" placeholder="Inicio del día" /></div>
+  </div>
+
+  <div class="row">
+    <div class="label"></div>
+    <div class="value"><button id="open">Abrir la carpeta</button></div>
+  </div>
+
+  <p class="hint">
+    <b>Tocá</b> la tecla y se abre todo lo que haya en la carpeta.<br /><br />
+    Para sumar una app, arrastrá su acceso directo (<code>.lnk</code>, <code>.url</code>
+    o el programa) a la carpeta; para sacarla, borralo. La tecla muestra los íconos
+    de las primeras cuatro y se actualiza sola en unos segundos.
+  </p>
+
+  <script src="pi.js"></script>
+  <script>
+    const setFolder = PI.text('folder', 'folder', '');
+    const setLabel = PI.text('label', 'label', '');
+    PI.button('open', 'open');
+
+    PI.ready(function (settings) {
+      setFolder(settings.folder);
+      setLabel(settings.label);
+    });
+  </script>
+</body>
+
+</html>

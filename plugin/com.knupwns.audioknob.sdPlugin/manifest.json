@@ -176,6 +176,16 @@
       "PropertyInspectorPath": "launcher.html"
     },
     {
+      "Icon": "images/sun",
+      "Name": "Inicio del día",
+      "States": [{ "Image": "images/sun", "TitleAlignment": "top", "FontSize": "10" }],
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": true,
+      "Tooltip": "Abrí de una todas las apps de la carpeta",
+      "UUID": "com.knupwns.audioknob.startday",
+      "PropertyInspectorPath": "startday.html"
+    },
+    {
       "Icon": "images/wake",
       "Name": "Host Wake & Watch",
       "States": [

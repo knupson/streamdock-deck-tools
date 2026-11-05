@@ -56,7 +56,7 @@ Invoke-Csc -Out (Join-Path $plugin 'DeckTools.exe') -Target 'winexe' `
                       'src\Media.cs', 'src\Json.cs', 'src\PluginHost.cs', 'src\ActionsAudio.cs', 'src\ActionsSystem.cs',
                       'src\ActionsLauncher.cs', 'src\ActionsNetwork.cs', 'src\ActionsSsh.cs',
                       'src\ActionsRemote.cs', 'src\ActionsRustDesk.cs',
-                      'src\ActionsSeparator.cs', 'src\ActionsMedia.cs',
+                      'src\ActionsSeparator.cs', 'src\ActionsMedia.cs', 'src\ActionsStartDay.cs',
                       'src\DiscordRpc.cs', 'src\DiscordAuth.cs', 'src\DiscordService.cs',
                       'src\ActionsDiscord.cs', 'src\Wiz.cs', 'src\Tuya.cs',
                       'src\IotConfig.cs', 'src\IotHub.cs', 'src\ActionsIot.cs', 'src\TuyaCloud.cs') `
